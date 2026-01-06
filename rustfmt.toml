@@ -1,0 +1,35 @@
+# Rust formatting configuration
+# Some options require nightly rustfmt (cargo +nightly fmt)
+
+# Maximum line width
+max_width = 100
+
+# Number of spaces per indentation level
+tab_spaces = 4
+
+# Use spaces for indentation (not tabs)
+hard_tabs = false
+
+# Edition to use for parsing
+edition = "2021"
+
+# Merge imports from the same module into a single use statement (nightly)
+imports_granularity = "Crate"
+
+# Group imports by type: std, external crates, then crate-local (nightly)
+group_imports = "StdExternalCrate"
+
+# Reorder imports alphabetically
+reorder_imports = true
+
+# Reorder module declarations alphabetically
+reorder_modules = true
+
+# Use Unix-style line endings
+newline_style = "Unix"
+
+# Use field init shorthand where possible
+use_field_init_shorthand = true
+
+# Use try! macro shorthand (?)
+use_try_shorthand = true
