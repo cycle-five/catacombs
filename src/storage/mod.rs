@@ -1,7 +1,7 @@
 //! Storage abstraction for Discord OAuth user and entitlement data.
 //!
 //! This module provides a trait-based storage abstraction with two implementations:
-//! - `SqlxStorage`: PostgreSQL storage via SQLx (feature: `sqlx-storage`)
+//! - `SqlxStorage`: `PostgreSQL` storage via `SQLx` (feature: `sqlx-storage`)
 //! - `MemoryStorage`: In-memory storage for testing (feature: `memory-storage`)
 
 use async_trait::async_trait;
@@ -30,8 +30,8 @@ pub trait UserStorage: Send + Sync {
     /// Get a user by their Discord user ID.
     ///
     /// Parameters:
-    ///     - user_id: `i64` - Discord user ID
-    ///     - encryption_key: `&str` - Encryption key used to decrypt the refresh token
+    ///     - `user_id`: `i64` - Discord user ID
+    ///     - `encryption_key`: `&str` - Encryption key used to decrypt the refresh token
     /// Returns:
     ///     - `Result<Option<User>>` - Retrieved user or None if not found
     /// Errors:
@@ -42,7 +42,7 @@ pub trait UserStorage: Send + Sync {
     ///
     /// Parameters:
     ///     - params: `UserUpsertParams` - Upsert parameters
-    ///     - encryption_key: `&str` - Encryption key used to encrypt the refresh token
+    ///     - `encryption_key`: `&str` - Encryption key used to encrypt the refresh token
     /// Returns:
     ///     - `Result<()>` - Success or error
     /// Errors:
@@ -52,10 +52,10 @@ pub trait UserStorage: Send + Sync {
     /// Update a user's refresh token.
     ///
     /// Parameters:
-    ///    - user_id: `i64` - Discord user ID
-    ///    - refresh_token: &str - New refresh token
-    ///    - token_expires_at: `DateTime<Utc>` - New token expiration time
-    ///    - encryption_key: &str - Encryption key used to encrypt the refresh token
+    ///    - `user_id`: `i64` - Discord user ID
+    ///    - `refresh_token`: &str - New refresh token
+    ///    - `token_expires_at`: `DateTime<Utc>` - New token expiration time
+    ///    - `encryption_key`: &str - Encryption key used to encrypt the refresh token
     /// Returns:
     ///    - `Result<()>` - Success or error
     /// Errors:
@@ -70,7 +70,7 @@ pub trait UserStorage: Send + Sync {
 
     /// Clear a user's OAuth tokens (logout).
     /// Parameters:
-    ///   - user_id: `i64` - Discord user ID
+    ///   - `user_id`: `i64` - Discord user ID
     /// Returns:
     ///   - `Result<()>` - Success or error
     /// Errors:
@@ -80,10 +80,10 @@ pub trait UserStorage: Send + Sync {
     /// Update a user's subscription status.
     ///
     /// Parameters:
-    ///    - user_id: `i64` - Discord user ID
+    ///    - `user_id`: `i64` - Discord user ID
     ///    - tier: `SubscriptionTier` - New subscription tier
     ///    - source: `SubscriptionSource` - Source of the subscription
-    ///    - expires_at: `Option<DateTime<Utc>>` - Subscription expiration time
+    ///    - `expires_at`: `Option<DateTime<Utc>>` - Subscription expiration time
     /// Returns:
     ///   - `Result<()>` - Success or error
     /// Errors:
@@ -103,11 +103,11 @@ pub trait EntitlementStorage: Send + Sync {
     /// Create or update an entitlement record.
     ///
     /// Parameters:
-    ///     - params: EntitlementUpsertParams - Upsert parameters
+    ///     - params: `EntitlementUpsertParams` - Upsert parameters
     /// Returns:
     ///    - Result<()> - Success or error
     /// Errors:
-    ///    - StorageError - If an error occurs during upsert
+    ///    - `StorageError` - If an error occurs during upsert
     async fn upsert_entitlement(&self, params: EntitlementUpsertParams) -> Result<()>;
 }
 

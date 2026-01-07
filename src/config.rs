@@ -5,7 +5,7 @@ use serde::Deserialize;
 /// Root configuration for the Discord OAuth application.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// Discord OAuth2 configuration.
+    /// Discord `OAuth2` configuration.
     pub discord: DiscordConfig,
     /// Security-related configuration.
     pub security: SecurityConfig,
@@ -14,14 +14,14 @@ pub struct Config {
     pub server: ServerConfig,
 }
 
-/// Discord OAuth2 and API configuration.
+/// Discord `OAuth2` and API configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscordConfig {
     /// Discord application client ID.
     pub client_id: String,
     /// Discord application client secret.
     pub client_secret: String,
-    /// OAuth2 redirect URI.
+    /// `OAuth2` redirect URI.
     pub redirect_uri: String,
     /// Discord bot token (required for entitlements API).
     pub bot_token: String,

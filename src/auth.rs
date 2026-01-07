@@ -3,9 +3,9 @@
 //! This module provides JWT token generation/validation and an Axum extractor
 //! for authenticated users.
 
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 
 use axum::{
     extract::{FromRef, FromRequestParts},
@@ -24,7 +24,7 @@ pub struct Claims {
     /// Username.
     pub username: String,
     /// Expiration timestamp (Unix epoch seconds).
-    pub exp: usize,
+    pub exp: i64,
 }
 
 /// Authenticated user extracted from JWT token.
@@ -103,6 +103,10 @@ where
 /// Generate a JWT token for a user.
 ///
 /// The token expires after 24 hours.
+/// # Errors
+///    - Returns `jsonwebtoken::errors::Error` if token generation fails.
+/// # Panics
+///    This function will panic if the now + 24 hours timestamp overflows.
 pub fn generate_token(
     user_id: i64,
     username: &str,
@@ -112,11 +116,11 @@ pub fn generate_token(
         .checked_add_signed(chrono::Duration::hours(24))
         .expect("valid timestamp")
         .timestamp();
-
+ 
     let claims = Claims {
         sub: user_id.to_string(),
         username: username.to_string(),
-        exp: expiration as usize,
+        exp: expiration,
     };
 
     jsonwebtoken::encode(
@@ -234,10 +238,10 @@ mod tests {
         let user_id = 333333333i64;
         let username = "expiry_test_user";
 
-        let before = chrono::Utc::now().timestamp() as usize;
+        let before = chrono::Utc::now().timestamp();
         let token = generate_token(user_id, username, TEST_JWT_SECRET).unwrap();
         let claims = validate_token(&token, TEST_JWT_SECRET).unwrap();
-        let after = chrono::Utc::now().timestamp() as usize;
+        let after = chrono::Utc::now().timestamp();
 
         // Token should expire approximately 24 hours from now
         let expected_min = before + 24 * 60 * 60 - 1;

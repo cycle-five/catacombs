@@ -2,11 +2,13 @@
 name = "catacombs"
 version = "0.0.1"
 edition = "2021"
+rust-version = "1.75.0"
 license = "MIT"
 description = "Catacombs is a simple Discord oauth2 library with user management and subscription support, uses Axum, SQLx, Tokio, Rustls by default."
 repository = "https://github.com/cycle-five/catacombs"
 keywords = ["discord", "oauth", "authentication", "axum"]
 categories = ["authentication", "web-programming", "api"]
+readme = "README.md"
 
 [features]
 default = ["sqlx-storage", "rustls-tls"]

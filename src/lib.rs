@@ -1,11 +1,11 @@
 //! Discord OAuth Template
 //!
-//! A library for implementing Discord Activity OAuth2 authentication
+//! A library for implementing Discord Activity `OAuth2` authentication
 //! with user management and subscription support.
 //!
 //! # Features
 //!
-//! - `sqlx-storage` (default): PostgreSQL storage via SQLx
+//! - `sqlx-storage` (default): `PostgreSQL` storage via `SQLx`
 //! - `memory-storage`: In-memory storage for testing
 //!
 //! # Example
@@ -67,7 +67,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create a new AppState with the given configuration and storage.
+    /// Create a new `AppState` with the given configuration and storage.
     pub fn new(config: Config, storage: impl Storage + 'static) -> Self {
         Self {
             config,
@@ -76,7 +76,7 @@ impl AppState {
         }
     }
 
-    /// Create a new AppState with a custom HTTP client.
+    /// Create a new `AppState` with a custom HTTP client.
     pub fn with_http_client(
         config: Config,
         storage: impl Storage + 'static,
@@ -90,5 +90,5 @@ impl AppState {
     }
 }
 
-/// Type alias for Arc-wrapped AppState, commonly used with Axum.
+/// Type alias for Arc-wrapped `AppState`, commonly used with Axum.
 pub type SharedState = Arc<AppState>;

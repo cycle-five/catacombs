@@ -15,6 +15,7 @@ pub enum SubscriptionTier {
 
 impl SubscriptionTier {
     /// Returns true if this tier grants premium access.
+    #[must_use] 
     pub fn is_premium(&self) -> bool {
         matches!(self, Self::Premium)
     }
@@ -52,7 +53,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for SubscriptionTier {
 }
 
 #[cfg(feature = "sqlx-storage")]
-impl<'q> sqlx::Encode<'q, sqlx::Postgres> for SubscriptionTier {
+impl sqlx::Encode<'_, sqlx::Postgres> for SubscriptionTier {
     fn encode_by_ref(
         &self,
         buf: &mut sqlx::postgres::PgArgumentBuffer,
@@ -86,7 +87,7 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for SubscriptionSource {
 }
 
 #[cfg(feature = "sqlx-storage")]
-impl<'q> sqlx::Encode<'q, sqlx::Postgres> for SubscriptionSource {
+impl sqlx::Encode<'_, sqlx::Postgres> for SubscriptionSource {
     fn encode_by_ref(
         &self,
         buf: &mut sqlx::postgres::PgArgumentBuffer,

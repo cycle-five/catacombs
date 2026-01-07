@@ -13,11 +13,11 @@ hard_tabs = false
 # Edition to use for parsing
 edition = "2021"
 
-# Merge imports from the same module into a single use statement (nightly)
-imports_granularity = "Crate"
+# # Merge imports from the same module into a single use statement (nightly)
+# imports_granularity = "Crate"
 
-# Group imports by type: std, external crates, then crate-local (nightly)
-group_imports = "StdExternalCrate"
+# # Group imports by type: std, external crates, then crate-local (nightly)
+# group_imports = "StdExternalCrate"
 
 # Reorder imports alphabetically
 reorder_imports = true

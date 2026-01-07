@@ -1,15 +1,12 @@
 # Rust
 /target/
-/backend/target/
-backend/static/
 **/*.rs.bk
 *.pdb
-**/*rustc-*
-
 
 # Environment variables
 .env
 .env.local
+.env.*.local
 
 # Database
 *.db
@@ -21,30 +18,28 @@ backend/static/
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
-
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.parcel-cache/
-frontend/yarn.lock
-
-settings.local.json
-# Playwright
-test-results
-frontend/test-results/
-frontend/playwright-report/
-frontend/playwright/.cache/
-frontend/tests/screenshots/
+Thumbs.db
 
 # Logs
 *.log
 logs/
 
-# Build artifacts
-backend/spell-cast-backend
+# Coverage
+*.profraw
+*.profdata
+coverage/
+lcov.info
+tarpaulin-report.html
 
-# Dictionary (large file, download separately)
-backend/dictionary.txt
+# Documentation build
+/doc/
 
-Cargo.lock
+# Backup files
+*.bak
+*.orig
+
+# Local settings
+settings.local.json

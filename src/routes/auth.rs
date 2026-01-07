@@ -1,7 +1,7 @@
-//! Discord OAuth2 authentication routes.
+//! Discord `OAuth2` authentication routes.
 //!
 //! This module provides HTTP handlers for:
-//! - Code exchange (OAuth2 authorization code -> access token)
+//! - Code exchange (`OAuth2` authorization code -> access token)
 //! - Token refresh
 //! - Token revocation
 //! - User info retrieval
@@ -75,7 +75,7 @@ struct DiscordUser {
     discriminator: Option<String>,
 }
 
-/// Discord OAuth2 token response.
+/// Discord `OAuth2` token response.
 #[derive(Debug, Deserialize)]
 struct DiscordTokenResponse {
     access_token: String,
@@ -405,9 +405,8 @@ fn build_avatar_url(user: &DiscordUser) -> String {
             .discriminator
             .as_deref()
             .and_then(|d| d.parse::<u32>().ok())
-            .map(|n| n % 5)
-            .unwrap_or(0);
-        format!("https://cdn.discordapp.com/embed/avatars/{}.png", index)
+            .map_or(0, |n| n % 5);
+        format!("https://cdn.discordapp.com/embed/avatars/{index}.png")
     }
 }
 
@@ -664,27 +663,27 @@ mod tests {
         UserResponse,
     };
 
-    /// Helper function to create a DiscordUser for testing.
+    /// Helper function to create a `DiscordUser` for testing.
     /// This reduces redundancy in test cases.
     /// Parameters:
     ///     - id: &str - Discord user ID
     ///     - username: &str - Discord username
     ///     - avatar: Option<&str> - Discord avatar hash
     /// Returns:
-    ///     - DiscordUser - Constructed DiscordUser instance
+    ///     - `DiscordUser` - Constructed `DiscordUser` instance
     fn make_discord_user(id: &str, username: &str, avatar: Option<&str>) -> DiscordUser {
         DiscordUser {
             id: id.to_string(),
             username: username.to_string(),
-            avatar: avatar.map(|s| s.to_string()),
+            avatar: avatar.map(std::string::ToString::to_string),
             global_name: None,
             discriminator: None,
         }
     }
 
-    /// Helper function to create a default DiscordUser for testing.
+    /// Helper function to create a default `DiscordUser` for testing.
     /// Returns:
-    ///     - DiscordUser - Constructed DiscordUser instance with default values
+    ///     - `DiscordUser` - Constructed `DiscordUser` instance with default values
     fn make_default_discord_user() -> DiscordUser {
         let id = "987654321";
         let username = "default_user";

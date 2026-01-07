@@ -1,4 +1,4 @@
-//! SQLx PostgreSQL storage implementation.
+//! `SQLx` `PostgreSQL` storage implementation.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -13,24 +13,29 @@ use crate::{
     storage::{EntitlementStorage, UserStorage},
 };
 
-/// SQLx PostgreSQL storage backend.
+/// `SQLx` `PostgreSQL` storage backend.
 #[derive(Debug, Clone)]
 pub struct SqlxStorage {
     pool: PgPool,
 }
 
 impl SqlxStorage {
-    /// Create a new SQLx storage with the given connection pool.
+    /// Create a new `SQLx` storage with the given connection pool.
+    #[must_use] 
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     /// Get a reference to the underlying connection pool.
+    #[must_use] 
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
     /// Run database migrations.
+    /// 
+    /// # Errors
+    ///    - Returns `StorageError` if migration fails.
     pub async fn migrate(&self) -> Result<()> {
         sqlx::migrate!("./migrations")
             .run(&self.pool)
@@ -44,7 +49,7 @@ impl SqlxStorage {
 impl UserStorage for SqlxStorage {
     async fn get_user(&self, user_id: i64, encryption_key: &str) -> Result<Option<User>> {
         let row = sqlx::query_as::<_, UserRow>(
-            r#"
+            r"
             SELECT
                 user_id, username, global_name, avatar_url,
                 refresh_token, token_expires_at,
@@ -52,7 +57,7 @@ impl UserStorage for SqlxStorage {
                 created_at, updated_at
             FROM users
             WHERE user_id = $1
-            "#,
+            ",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -97,7 +102,7 @@ impl UserStorage for SqlxStorage {
         };
 
         sqlx::query(
-            r#"
+            r"
             INSERT INTO users (user_id, username, global_name, avatar_url, refresh_token, token_expires_at)
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (user_id) DO UPDATE SET
@@ -107,7 +112,7 @@ impl UserStorage for SqlxStorage {
                 refresh_token = COALESCE(EXCLUDED.refresh_token, users.refresh_token),
                 token_expires_at = COALESCE(EXCLUDED.token_expires_at, users.token_expires_at),
                 updated_at = NOW()
-            "#,
+            ",
         )
         .bind(params.user_id)
         .bind(params.username)
@@ -133,11 +138,11 @@ impl UserStorage for SqlxStorage {
             .map_err(|e| StorageError::Other(format!("failed to encrypt refresh token: {e}")))?;
 
         sqlx::query(
-            r#"
+            r"
             UPDATE users
             SET refresh_token = $2, token_expires_at = $3, updated_at = NOW()
             WHERE user_id = $1
-            "#,
+            ",
         )
         .bind(user_id)
         .bind(encrypted_token)
@@ -151,11 +156,11 @@ impl UserStorage for SqlxStorage {
 
     async fn clear_user_tokens(&self, user_id: i64) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             UPDATE users
             SET refresh_token = NULL, token_expires_at = NULL, updated_at = NOW()
             WHERE user_id = $1
-            "#,
+            ",
         )
         .bind(user_id)
         .execute(&self.pool)
@@ -173,11 +178,11 @@ impl UserStorage for SqlxStorage {
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             UPDATE users
             SET subscription_tier = $2, subscription_source = $3, subscription_expires_at = $4, updated_at = NOW()
             WHERE user_id = $1
-            "#,
+            ",
         )
         .bind(user_id)
         .bind(tier)
@@ -195,14 +200,14 @@ impl UserStorage for SqlxStorage {
 impl EntitlementStorage for SqlxStorage {
     async fn upsert_entitlement(&self, params: EntitlementUpsertParams) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO entitlements (entitlement_id, user_id, sku_id, entitlement_type, is_test, consumed, starts_at, ends_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (entitlement_id) DO UPDATE SET
                 consumed = EXCLUDED.consumed,
                 ends_at = EXCLUDED.ends_at,
                 updated_at = NOW()
-            "#,
+            ",
         )
         .bind(params.entitlement_id)
         .bind(params.user_id)
@@ -220,7 +225,7 @@ impl EntitlementStorage for SqlxStorage {
     }
 }
 
-/// Internal row type for SQLx queries.
+/// Internal row type for `SQLx` queries.
 #[derive(Debug, sqlx::FromRow)]
 struct UserRow {
     user_id: i64,

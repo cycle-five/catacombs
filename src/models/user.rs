@@ -12,7 +12,7 @@ pub struct User {
     pub user_id: i64,
     /// Discord username.
     pub username: String,
-    /// Discord display name (global_name).
+    /// Discord display name (`global_name`).
     pub global_name: Option<String>,
     /// URL to the user's Discord avatar.
     pub avatar_url: Option<String>,
@@ -35,6 +35,7 @@ pub struct User {
 
 impl User {
     /// Returns true if the user has an active premium subscription.
+    #[must_use] 
     pub fn is_premium(&self) -> bool {
         if !self.subscription_tier.is_premium() {
             return false;
@@ -47,7 +48,8 @@ impl User {
         }
     }
 
-    /// Returns the display name for the user, preferring global_name over username.
+    /// Returns the display name for the user, preferring `global_name` over username.
+    #[must_use] 
     pub fn display_name(&self) -> &str {
         self.global_name.as_deref().unwrap_or(&self.username)
     }
