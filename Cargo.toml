@@ -1,21 +1,24 @@
 [package]
-name = "discord-oauth-template"
+name = "catacombs"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
-description = "Discord Activity OAuth2 template with user management and subscription support"
-repository = "https://github.com/yourusername/discord-oauth-template"
+description = "Catacombs is a simple Discord oauth2 library with user management and subscription support, uses Axum, SQLx, Tokio, Rustls by default."
+repository = "https://github.com/cycle-five/discord-oauth-template"
 keywords = ["discord", "oauth", "authentication", "axum"]
-categories = ["authentication", "web-programming"]
+categories = ["authentication", "web-programming", "api"]
 
 [features]
-default = ["sqlx-storage"]
+default = ["sqlx-storage", "rustls-tls"]
 sqlx-storage = ["dep:sqlx"]
 memory-storage = []
+# TLS backends (choose one)
+rustls-tls = ["reqwest/rustls-tls", "sqlx?/tls-rustls"]
+native-tls = ["reqwest/native-tls", "sqlx?/tls-native-tls"]
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 
 # Web framework
 axum = { version = "0.8", features = ["ws", "macros"] }
@@ -53,7 +56,8 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # HTTP client (for Discord API)
-reqwest = { version = "0.12", features = ["json"] }
+# TLS backend controlled via rustls-tls/native-tls features
+reqwest = { version = "0.12", default-features = false, features = ["json", "charset", "http2", "macos-system-configuration"] }
 
 # OAuth2
 oauth2 = "5.0"

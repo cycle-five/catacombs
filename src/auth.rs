@@ -4,6 +4,8 @@
 //! for authenticated users.
 
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::future::Future;
 
 use axum::{
     extract::{FromRef, FromRequestParts},
@@ -51,7 +53,7 @@ where
     fn from_request_parts(
         parts: &mut Parts,
         state: &S,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         let app_state = Arc::<AppState>::from_ref(state);
 
         // Try to extract token from Authorization header first
@@ -67,7 +69,7 @@ where
                     .uri
                     .query()
                     .and_then(|q| {
-                        serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(q)
+                        serde_urlencoded::from_str::<HashMap<String, String>>(q)
                             .ok()
                     })
                     .and_then(|params| params.get("token").cloned())

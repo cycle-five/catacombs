@@ -79,8 +79,9 @@ pub struct EntitlementUpsertParams {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::Duration;
+
+    use super::*;
 
     fn make_test_user() -> User {
         User {

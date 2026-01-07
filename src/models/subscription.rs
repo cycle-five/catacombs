@@ -41,9 +41,7 @@ impl sqlx::Type<sqlx::Postgres> for SubscriptionTier {
 
 #[cfg(feature = "sqlx-storage")]
 impl<'r> sqlx::Decode<'r, sqlx::Postgres> for SubscriptionTier {
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, sqlx::error::BoxDynError> {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
         match s.as_str() {
             "free" => Ok(Self::Free),
@@ -76,9 +74,7 @@ impl sqlx::Type<sqlx::Postgres> for SubscriptionSource {
 
 #[cfg(feature = "sqlx-storage")]
 impl<'r> sqlx::Decode<'r, sqlx::Postgres> for SubscriptionSource {
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, sqlx::error::BoxDynError> {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
         match s.as_str() {
             "discord" => Ok(Self::Discord),

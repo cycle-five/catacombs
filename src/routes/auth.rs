@@ -72,6 +72,7 @@ struct DiscordUser {
     username: String,
     avatar: Option<String>,
     global_name: Option<String>,
+    discriminator: Option<String>,
 }
 
 /// Discord OAuth2 token response.
@@ -133,12 +134,7 @@ pub async fn exchange_code(
     })? as i64;
 
     // Build avatar URL
-    let avatar_url = discord_user.avatar.as_ref().map(|avatar_hash| {
-        format!(
-            "https://cdn.discordapp.com/avatars/{}/{}.png",
-            discord_user.id, avatar_hash
-        )
-    });
+    let avatar_url = build_avatar_url(&discord_user);
 
     // Calculate token expiration
     let token_expires_at = Utc::now() + chrono::Duration::seconds(discord_token.expires_in);
@@ -151,7 +147,7 @@ pub async fn exchange_code(
                 user_id,
                 username: &discord_user.username,
                 global_name: discord_user.global_name.as_deref(),
-                avatar_url: avatar_url.as_deref(),
+                avatar_url: Some(&avatar_url.clone()),
                 refresh_token: Some(&discord_token.refresh_token),
                 token_expires_at: Some(token_expires_at),
             },
@@ -391,6 +387,29 @@ pub async fn get_current_user(
 // ============================================================================
 // Discord API helpers
 // ============================================================================
+
+/// Build a CDN URL for a Discord user's avatar (or the default embed avatar).
+fn build_avatar_url(user: &DiscordUser) -> String {
+    if let Some(avatar_hash) = user.avatar.as_ref() {
+        let ext = if avatar_hash.starts_with("a_") {
+            "gif"
+        } else {
+            "png"
+        };
+        format!(
+            "https://cdn.discordapp.com/avatars/{}/{}.{}?size=1024",
+            user.id, avatar_hash, ext
+        )
+    } else {
+        let index = user
+            .discriminator
+            .as_deref()
+            .and_then(|d| d.parse::<u32>().ok())
+            .map(|n| n % 5)
+            .unwrap_or(0);
+        format!("https://cdn.discordapp.com/embed/avatars/{}.png", index)
+    }
+}
 
 async fn exchange_code_with_discord(
     state: &AppState,
@@ -640,7 +659,38 @@ async fn process_user_entitlements(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        build_avatar_url, CodeExchangeRequest, DiscordUser, SubscriptionTier, TokenResponse,
+        UserResponse,
+    };
+
+    /// Helper function to create a DiscordUser for testing.
+    /// This reduces redundancy in test cases.
+    /// Parameters:
+    ///     - id: &str - Discord user ID
+    ///     - username: &str - Discord username
+    ///     - avatar: Option<&str> - Discord avatar hash
+    /// Returns:
+    ///     - DiscordUser - Constructed DiscordUser instance
+    fn make_discord_user(id: &str, username: &str, avatar: Option<&str>) -> DiscordUser {
+        DiscordUser {
+            id: id.to_string(),
+            username: username.to_string(),
+            avatar: avatar.map(|s| s.to_string()),
+            global_name: None,
+            discriminator: None,
+        }
+    }
+
+    /// Helper function to create a default DiscordUser for testing.
+    /// Returns:
+    ///     - DiscordUser - Constructed DiscordUser instance with default values
+    fn make_default_discord_user() -> DiscordUser {
+        let id = "987654321";
+        let username = "default_user";
+        let avatar = None;
+        make_discord_user(id, username, avatar)
+    }
 
     #[test]
     fn test_code_exchange_request_deserialization() {
@@ -699,5 +749,13 @@ mod tests {
             avatar_url,
             "https://cdn.discordapp.com/avatars/123456789/abc123def456.png"
         );
+    }
+
+    #[test]
+    fn test_avatar_url_generation_with_discriminator() {
+        let user = make_default_discord_user();
+        let avatar_url = build_avatar_url(&user);
+
+        assert_eq!(avatar_url, "https://cdn.discordapp.com/embed/avatars/0.png");
     }
 }

@@ -1,13 +1,18 @@
 //! In-memory storage implementation for testing.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
-use std::collections::HashMap;
 
-use crate::error::Result;
-use crate::models::{EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, User, UserUpsertParams};
-use crate::storage::{EntitlementStorage, UserStorage};
+use crate::{
+    error::Result,
+    models::{
+        EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, User, UserUpsertParams,
+    },
+    storage::{EntitlementStorage, UserStorage},
+};
 
 /// In-memory storage backend for testing and development.
 ///
@@ -164,8 +169,9 @@ impl EntitlementStorage for MemoryStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::Duration;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_memory_storage_user_lifecycle() {

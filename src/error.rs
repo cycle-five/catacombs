@@ -1,7 +1,9 @@
 //! Error types for Discord OAuth template.
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 
 /// Result type alias using the library's error type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -57,9 +59,10 @@ impl IntoResponse for Error {
             Error::Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             Error::DiscordApi(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             Error::Jwt(_) => (StatusCode::UNAUTHORIZED, "invalid token".to_string()),
-            Error::Encryption(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "encryption error".to_string())
-            }
+            Error::Encryption(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "encryption error".to_string(),
+            ),
             Error::UserNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             Error::AuthFailed(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             Error::InvalidRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),

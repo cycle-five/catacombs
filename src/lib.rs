@@ -43,18 +43,16 @@ pub mod routes;
 pub mod storage;
 
 // Re-exports for convenience
+use std::sync::Arc;
+
 pub use config::{Config, ConfigError, DiscordConfig, SecurityConfig, ServerConfig};
 pub use error::{Error, Result, StorageError};
 pub use models::{SubscriptionSource, SubscriptionTier, User};
-pub use storage::{EntitlementStorage, Storage, UserStorage};
-
-#[cfg(feature = "sqlx-storage")]
-pub use storage::SqlxStorage;
-
 #[cfg(feature = "memory-storage")]
 pub use storage::MemoryStorage;
-
-use std::sync::Arc;
+#[cfg(feature = "sqlx-storage")]
+pub use storage::SqlxStorage;
+pub use storage::{EntitlementStorage, Storage, UserStorage};
 
 /// Application state containing configuration and storage.
 ///

@@ -46,3 +46,5 @@ backend/spell-cast-backend
 
 # Dictionary (large file, download separately)
 backend/dictionary.txt
+
+Cargo.lock

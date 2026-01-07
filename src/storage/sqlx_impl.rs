@@ -4,10 +4,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::encryption;
-use crate::error::{Result, StorageError};
-use crate::models::{EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, User, UserUpsertParams};
-use crate::storage::{EntitlementStorage, UserStorage};
+use crate::{
+    encryption,
+    error::{Result, StorageError},
+    models::{
+        EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, User, UserUpsertParams,
+    },
+    storage::{EntitlementStorage, UserStorage},
+};
 
 /// SQLx PostgreSQL storage backend.
 #[derive(Debug, Clone)]
@@ -58,11 +62,11 @@ impl UserStorage for SqlxStorage {
         match row {
             Some(row) => {
                 let refresh_token = match row.refresh_token {
-                    Some(encrypted) => {
-                        Some(encryption::decrypt(&encrypted, encryption_key).map_err(|e| {
+                    Some(encrypted) => Some(
+                        encryption::decrypt(&encrypted, encryption_key).map_err(|e| {
                             StorageError::Other(format!("failed to decrypt refresh token: {e}"))
-                        })?)
-                    }
+                        })?,
+                    ),
                     None => None,
                 };
 
