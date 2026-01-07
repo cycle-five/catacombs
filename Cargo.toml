@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT"
 description = "Catacombs is a simple Discord oauth2 library with user management and subscription support, uses Axum, SQLx, Tokio, Rustls by default."
-repository = "https://github.com/cycle-five/discord-oauth-template"
+repository = "https://github.com/cycle-five/catacombs"
 keywords = ["discord", "oauth", "authentication", "axum"]
 categories = ["authentication", "web-programming", "api"]
 
