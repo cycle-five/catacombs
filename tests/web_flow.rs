@@ -209,3 +209,56 @@ async fn an_empty_state_does_not_match_a_missing_state_cookie() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert!(rec.token_requests.lock().unwrap().is_empty());
 }
+
+async fn post(app: Router, uri: &str, cookie: Option<&str>) -> Response<Body> {
+    let mut req = Request::post(uri);
+    if let Some(c) = cookie {
+        req = req.header(header::COOKIE, c);
+    }
+    app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap()
+}
+
+#[tokio::test]
+async fn logout_clears_the_session_cookie_and_the_stored_tokens() {
+    let (base, _rec) = spawn_mock_discord().await;
+    let state = test_state(&base);
+    let app = auth_router().with_state(state.clone());
+    let login = get(
+        app.clone(),
+        "/callback?code=good&state=abc",
+        Some(&format!("{STATE_COOKIE}=abc")),
+    )
+    .await;
+    let jwt = value(cookie(&set_cookies(&login), "catacombs_session").unwrap());
+    let user_id: i64 = MOCK_USER_ID.parse().unwrap();
+    let before = state.storage.get_user(user_id, "k").await.unwrap().unwrap();
+    assert!(
+        before.refresh_token.is_some(),
+        "login stored a refresh token"
+    );
+
+    let resp = post(app, "/logout", Some(&format!("catacombs_session={jwt}"))).await;
+
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let set = set_cookies(&resp);
+    let cleared = cookie(&set, "catacombs_session").expect("session cookie cleared");
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    let after = state.storage.get_user(user_id, "k").await.unwrap().unwrap();
+    assert!(after.refresh_token.is_none());
+}
+
+#[tokio::test]
+async fn logout_without_a_valid_session_still_clears_the_cookie() {
+    let (base, _rec) = spawn_mock_discord().await;
+    let resp = post(
+        app(&base),
+        "/logout",
+        Some("catacombs_session=expired.or.garbage"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let set = set_cookies(&resp);
+    assert!(cookie(&set, "catacombs_session")
+        .expect("cleared")
+        .contains("Max-Age=0"));
+}

@@ -15,6 +15,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +31,7 @@ use crate::{
 /// - `POST /exchange` - Exchange authorization code for tokens
 /// - `POST /refresh` - Refresh the OAuth token
 /// - `POST /revoke` - Revoke tokens with Discord
-/// - `POST /logout` - Clear local tokens
+/// - `POST /logout` - Delete the session cookie and clear local tokens
 /// - `GET /me` - Get current user info
 /// - `GET /login` - Start the website flow (redirect to Discord)
 /// - `GET /callback` - Finish the website flow (sets the session cookie)
@@ -347,28 +348,24 @@ pub async fn revoke_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Log out the user by clearing their stored tokens.
+/// Log out: always delete the session cookie; if the caller is
+/// authenticated, also clear their stored Discord tokens.
+///
+/// A missing or expired session is not an error here -- the cookie still has
+/// to go, or the browser keeps sending a dead token.
 pub async fn logout(
-    user: AuthenticatedUser,
+    user: Result<AuthenticatedUser, StatusCode>,
     State(state): State<Arc<AppState>>,
-) -> Result<StatusCode, StatusCode> {
-    tracing::info!("Logging out user: {} ({})", user.username, user.user_id);
-
-    state
-        .storage
-        .clear_user_tokens(user.user_id)
-        .await
-        .map_err(|e| {
+    jar: CookieJar,
+) -> (CookieJar, StatusCode) {
+    if let Ok(user) = user {
+        tracing::info!("Logging out user: {} ({})", user.username, user.user_id);
+        if let Err(e) = state.storage.clear_user_tokens(user.user_id).await {
             tracing::error!("Failed to clear tokens for logout: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    tracing::info!(
-        "Successfully logged out user: {} ({})",
-        user.username,
-        user.user_id
-    );
-    Ok(StatusCode::NO_CONTENT)
+        }
+    }
+    let jar = jar.remove(super::web::removal(state.config.web.cookie_name.clone()));
+    (jar, StatusCode::NO_CONTENT)
 }
 
 /// Get current user info from storage.
