@@ -104,28 +104,33 @@ struct DiscordEntitlementResponse {
     consumed: bool,
 }
 
-/// Exchange Discord authorization code for access token and create user session.
-pub async fn exchange_code(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<CodeExchangeRequest>,
-) -> Result<Json<TokenResponse>, StatusCode> {
-    tracing::info!("Exchanging authorization code for access token");
+/// A completed Discord login: our JWT and Discord's own access token.
+pub(crate) struct Login {
+    pub jwt: String,
+    pub discord_access_token: String,
+}
 
+/// Exchange `code` with Discord, upsert the user, refresh entitlements, and
+/// mint our JWT. Shared by the SDK flow (`POST /exchange`) and the website
+/// flow (`GET /callback`), so the two cannot drift.
+pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login, StatusCode> {
     // Exchange authorization code for Discord access token
-    let discord_token = exchange_code_with_discord(&state, &payload.code)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to exchange code with Discord: {}", e);
-            StatusCode::UNAUTHORIZED
-        })?;
+    let discord_token = exchange_code_with_discord(state, code).await.map_err(|e| {
+        tracing::error!("Failed to exchange code with Discord: {}", e);
+        StatusCode::UNAUTHORIZED
+    })?;
 
     // Get user info from Discord API
-    let discord_user = get_discord_user_info(&discord_token.access_token, &state.http_client)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get Discord user info: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let discord_user = get_discord_user_info(
+        &state.config.discord.api_base,
+        &discord_token.access_token,
+        &state.http_client,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to get Discord user info: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Parse Discord user ID (u64 snowflake stored as i64)
     let user_id = discord_user.id.parse::<u64>().map_err(|e| {
@@ -161,9 +166,9 @@ pub async fn exchange_code(
 
     // Fetch and process user entitlements for premium status
     if state.config.discord.premium_sku_id.is_some() {
-        match fetch_user_entitlements(&state, user_id).await {
+        match fetch_user_entitlements(state, user_id).await {
             Ok(entitlements) => {
-                if let Err(e) = process_user_entitlements(&state, user_id, entitlements).await {
+                if let Err(e) = process_user_entitlements(state, user_id, entitlements).await {
                     tracing::warn!("Failed to process entitlements for user {}: {}", user_id, e);
                 }
             }
@@ -190,9 +195,22 @@ pub async fn exchange_code(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    Ok(Login {
+        jwt: jwt_token,
+        discord_access_token: discord_token.access_token,
+    })
+}
+
+/// Exchange Discord authorization code for access token and create user session.
+pub async fn exchange_code(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CodeExchangeRequest>,
+) -> Result<Json<TokenResponse>, StatusCode> {
+    tracing::info!("Exchanging authorization code for access token");
+    let login = complete_login(&state, &payload.code).await?;
     Ok(Json(TokenResponse {
-        access_token: jwt_token,
-        discord_access_token: Some(discord_token.access_token),
+        access_token: login.jwt,
+        discord_access_token: Some(login.discord_access_token),
     }))
 }
 
@@ -422,7 +440,7 @@ async fn exchange_code_with_discord(
 
     let response = state
         .http_client
-        .post("https://discord.com/api/v10/oauth2/token")
+        .post(format!("{}/oauth2/token", state.config.discord.api_base))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
             &state.config.discord.client_id,
@@ -443,11 +461,12 @@ async fn exchange_code_with_discord(
 }
 
 async fn get_discord_user_info(
+    api_base: &str,
     access_token: &str,
     http_client: &reqwest::Client,
 ) -> anyhow::Result<DiscordUser> {
     let response = http_client
-        .get("https://discord.com/api/v10/users/@me")
+        .get(format!("{api_base}/users/@me"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()
         .await?;
@@ -477,7 +496,7 @@ async fn refresh_discord_token(
 
     let response = state
         .http_client
-        .post("https://discord.com/api/v10/oauth2/token")
+        .post(format!("{}/oauth2/token", state.config.discord.api_base))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
             &state.config.discord.client_id,
@@ -502,7 +521,10 @@ async fn revoke_discord_token(state: &AppState, token: &str) -> anyhow::Result<(
 
     let response = state
         .http_client
-        .post("https://discord.com/api/v10/oauth2/token/revoke")
+        .post(format!(
+            "{}/oauth2/token/revoke",
+            state.config.discord.api_base
+        ))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
             &state.config.discord.client_id,
@@ -531,8 +553,8 @@ async fn fetch_user_entitlements(
 ) -> anyhow::Result<Vec<DiscordEntitlementResponse>> {
     let user_id_str = user_id.to_string();
     let url = format!(
-        "https://discord.com/api/v10/applications/{}/entitlements?user_id={}&exclude_ended=false",
-        state.config.discord.client_id, user_id_str
+        "{}/applications/{}/entitlements?user_id={}&exclude_ended=false",
+        state.config.discord.api_base, state.config.discord.client_id, user_id_str
     );
 
     let response = state

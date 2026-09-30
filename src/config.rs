@@ -28,6 +28,10 @@ pub struct DiscordConfig {
     /// Optional SKU ID for premium subscription entitlements.
     #[serde(default)]
     pub premium_sku_id: Option<i64>,
+    /// Base URL of Discord's REST API. Overridable so tests can point the
+    /// token and user calls at a local mock.
+    #[serde(default = "default_api_base")]
+    pub api_base: String,
 }
 
 /// Security configuration.
@@ -48,6 +52,11 @@ pub struct ServerConfig {
     /// Port to listen on.
     #[serde(default = "default_port")]
     pub port: u16,
+}
+
+/// Discord's REST API, version 10.
+pub fn default_api_base() -> String {
+    "https://discord.com/api/v10".to_string()
 }
 
 fn default_host() -> String {
@@ -76,6 +85,7 @@ impl Config {
     /// - `DISCORD_REDIRECT_URI`
     /// - `DISCORD_BOT_TOKEN`
     /// - `DISCORD_PREMIUM_SKU_ID` (optional)
+    /// - `DISCORD_API_BASE` (optional, defaults to Discord's v10 API)
     /// - `JWT_SECRET`
     /// - `ENCRYPTION_KEY`
     /// - `HOST` (optional, defaults to "0.0.0.0")
@@ -93,6 +103,7 @@ impl Config {
             premium_sku_id: std::env::var("DISCORD_PREMIUM_SKU_ID")
                 .ok()
                 .and_then(|s| s.parse().ok()),
+            api_base: std::env::var("DISCORD_API_BASE").unwrap_or_else(|_| default_api_base()),
         };
 
         let security = SecurityConfig {
