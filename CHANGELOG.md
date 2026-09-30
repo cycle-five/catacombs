@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Config.web` and `DiscordConfig.api_base` are new fields, so code building
+  these structs by literal must add `web: WebConfig::default()` and
+  `api_base: catacombs::config::default_api_base()`.
 - The `AuthenticatedUser` extractor reads the session cookie first, then the
   `Authorization` header, then `?token=`.
 - `POST /logout` always returns 204 and deletes the session cookie; it clears

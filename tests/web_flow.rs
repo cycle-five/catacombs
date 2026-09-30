@@ -243,6 +243,7 @@ async fn logout_clears_the_session_cookie_and_the_stored_tokens() {
     let set = set_cookies(&resp);
     let cleared = cookie(&set, "catacombs_session").expect("session cookie cleared");
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    assert!(cleared.contains("Secure"), "{cleared}");
     let after = state.storage.get_user(user_id, "k").await.unwrap().unwrap();
     assert!(after.refresh_token.is_none());
 }

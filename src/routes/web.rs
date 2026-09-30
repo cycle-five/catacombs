@@ -98,8 +98,17 @@ pub(crate) fn session_cookie(web: &WebConfig, jwt: String) -> Cookie<'static> {
 }
 
 /// A cookie that, passed to `CookieJar::remove`, deletes `name` at `/`.
-pub(crate) fn removal(name: String) -> Cookie<'static> {
-    Cookie::build((name, "")).path("/").build()
+///
+/// It carries the same `Secure`/`HttpOnly`/`SameSite` attributes as the cookie
+/// it deletes: browsers reject a `__Host-`/`__Secure-` `Set-Cookie` without
+/// `Secure`, deletions included.
+pub(crate) fn removal(web: &WebConfig, name: String) -> Cookie<'static> {
+    Cookie::build((name, ""))
+        .http_only(true)
+        .secure(web.secure_cookies)
+        .same_site(SameSite::Lax)
+        .path("/")
+        .build()
 }
 
 /// `GET /login?return_to=/path` — start a login.
@@ -136,12 +145,12 @@ pub async fn callback(
     // Validated again here: the cookie could have been planted.
     let return_to = safe_return_to(jar.get(RETURN_COOKIE).map(Cookie::value));
     let jar = jar
-        .remove(removal(STATE_COOKIE.to_owned()))
-        .remove(removal(RETURN_COOKIE.to_owned()));
+        .remove(removal(&state.config.web, STATE_COOKIE.to_owned()))
+        .remove(removal(&state.config.web, RETURN_COOKIE.to_owned()));
 
     if let Some(error) = q.error {
         // The user cancelled on Discord. Back where they were, logged out.
-        tracing::info!("Discord login not completed: {error}");
+        tracing::info!("Discord login not completed: {error:?}");
         return Ok((jar, Redirect::to(&return_to)));
     }
 

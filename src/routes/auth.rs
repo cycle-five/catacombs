@@ -364,7 +364,10 @@ pub async fn logout(
             tracing::error!("Failed to clear tokens for logout: {}", e);
         }
     }
-    let jar = jar.remove(super::web::removal(state.config.web.cookie_name.clone()));
+    let jar = jar.remove(super::web::removal(
+        &state.config.web,
+        state.config.web.cookie_name.clone(),
+    ));
     (jar, StatusCode::NO_CONTENT)
 }
 

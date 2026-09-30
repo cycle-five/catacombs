@@ -56,8 +56,6 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-
     // Load configuration from environment
     let config = Config::from_env()?;
 
@@ -81,6 +79,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+The snippet's own app also needs `tokio`, `sqlx` and `anyhow` in its dependencies.
 
 ## Configuration
 
@@ -146,9 +146,15 @@ redirect and keep them logged in with a cookie:
   `/auth/callback` checks the OAuth `state`, sets the session cookie and sends
   the user to `return_to` (same-site paths only).
 - Protect handlers with the `AuthenticatedUser` extractor.
+- Tune it with `Config.web` (`WebConfig`): `scopes`, `cookie_name` and
+  `secure_cookies`. `DISCORD_API_BASE` overrides Discord's API URL (for tests).
 - `POST /auth/logout` signs out: it deletes the cookie and clears stored tokens.
 - The session is a `SameSite=Lax`, HttpOnly cookie, so state-changing endpoints
   should additionally require a JSON content type or check `Origin`.
+- catacombs' own `POST /refresh`, `/revoke` and `/logout` accept the session
+  cookie and rely on `SameSite=Lax`. A same-site attacker (for example on a
+  sibling subdomain) is not blocked, so host the site on a domain whose
+  subdomains you control.
 
 ## Development
 
