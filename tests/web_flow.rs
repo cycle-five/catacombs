@@ -126,7 +126,14 @@ async fn a_good_callback_sets_the_session_and_returns_the_user() {
 
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     assert_eq!(location(&resp), "/g/42");
-    assert_eq!(rec.token_requests.lock().unwrap().len(), 1);
+    {
+        let sent = rec.token_requests.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        // The code from the query, not the state, goes to Discord.
+        assert_eq!(sent[0].form["code"], "good");
+        assert_eq!(sent[0].form["redirect_uri"], REDIRECT_URI);
+        assert_eq!(sent[0].form["grant_type"], "authorization_code");
+    }
     let set = set_cookies(&resp);
     let session = cookie(&set, "catacombs_session").expect("session cookie");
     for attr in [
