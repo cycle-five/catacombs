@@ -12,6 +12,9 @@ pub struct Config {
     /// Server configuration.
     #[serde(default)]
     pub server: ServerConfig,
+    /// The website flow: `/login`, `/callback` and the session cookie.
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 /// Discord `OAuth2` and API configuration.
@@ -52,6 +55,43 @@ pub struct ServerConfig {
     /// Port to listen on.
     #[serde(default = "default_port")]
     pub port: u16,
+}
+
+/// Settings for the browser redirect flow and its session cookie.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebConfig {
+    /// OAuth scopes requested at `/login`.
+    #[serde(default = "default_scopes")]
+    pub scopes: Vec<String>,
+    /// Name of the cookie holding the session JWT.
+    #[serde(default = "default_cookie_name")]
+    pub cookie_name: String,
+    /// Mark cookies `Secure`. Browsers accept `Secure` cookies on
+    /// `http://localhost`, so this stays on even for local development.
+    #[serde(default = "default_true")]
+    pub secure_cookies: bool,
+}
+
+fn default_scopes() -> Vec<String> {
+    vec!["identify".to_string()]
+}
+
+fn default_cookie_name() -> String {
+    "catacombs_session".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            scopes: default_scopes(),
+            cookie_name: default_cookie_name(),
+            secure_cookies: true,
+        }
+    }
 }
 
 /// Discord's REST API, version 10.
@@ -125,6 +165,7 @@ impl Config {
             discord,
             security,
             server,
+            web: WebConfig::default(),
         })
     }
 }

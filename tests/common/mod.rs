@@ -14,7 +14,9 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use catacombs::{AppState, Config, DiscordConfig, MemoryStorage, SecurityConfig, ServerConfig};
+use catacombs::{
+    AppState, Config, DiscordConfig, MemoryStorage, SecurityConfig, ServerConfig, WebConfig,
+};
 use serde::Serialize;
 
 pub const CLIENT_ID: &str = "client-id-123";
@@ -129,6 +131,7 @@ pub fn test_config(api_base: &str) -> Config {
             encryption_key: "unused-by-memory-storage".to_string(),
         },
         server: ServerConfig::default(),
+        web: WebConfig::default(),
     }
 }
 
