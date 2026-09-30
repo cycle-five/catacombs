@@ -1,8 +1,8 @@
 [package]
 name = "catacombs"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
-rust-version = "1.75.0"
+rust-version = "1.88"
 license = "MIT"
 description = "Catacombs is a simple Discord oauth2 library with user management and subscription support, uses Axum, SQLx, Tokio, Rustls by default."
 repository = "https://github.com/cycle-five/catacombs"
@@ -23,10 +23,9 @@ native-tls = ["reqwest/native-tls", "sqlx?/tls-native-tls"]
 tokio = { version = "1.49.0", features = ["full"] }
 
 # Web framework
-axum = { version = "0.8", features = ["ws", "macros"] }
-axum-extra = { version = "0.12", features = ["typed-header"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.12", features = ["cookie"] }
+cookie = "0.18"
 async-trait = "0.1"
 
 # Serialization
@@ -50,9 +49,6 @@ uuid = { version = "1.19.0", features = ["v4", "serde"] }
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
 
-# Environment variables
-dotenvy = "0.15"
-
 # Error handling
 anyhow = "1.0"
 thiserror = "2.0"
@@ -60,9 +56,6 @@ thiserror = "2.0"
 # HTTP client (for Discord API)
 # TLS backend controlled via rustls-tls/native-tls features
 reqwest = { version = "0.12", default-features = false, features = ["json", "charset", "http2", "macos-system-configuration"] }
-
-# OAuth2
-oauth2 = "5.0"
 
 # JWT
 jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
@@ -72,7 +65,6 @@ parking_lot = "0.12"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Random number generation
 rand = "0.9"
@@ -85,6 +77,8 @@ base64 = "0.22"
 [dev-dependencies]
 # Testing
 tokio-test = "0.4"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [profile.release]
 

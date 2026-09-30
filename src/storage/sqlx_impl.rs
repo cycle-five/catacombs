@@ -21,19 +21,19 @@ pub struct SqlxStorage {
 
 impl SqlxStorage {
     /// Create a new `SQLx` storage with the given connection pool.
-    #[must_use] 
+    #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     /// Get a reference to the underlying connection pool.
-    #[must_use] 
+    #[must_use]
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
     /// Run database migrations.
-    /// 
+    ///
     /// # Errors
     ///    - Returns `StorageError` if migration fails.
     pub async fn migrate(&self) -> Result<()> {

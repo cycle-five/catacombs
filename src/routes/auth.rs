@@ -15,6 +15,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -30,8 +31,10 @@ use crate::{
 /// - `POST /exchange` - Exchange authorization code for tokens
 /// - `POST /refresh` - Refresh the OAuth token
 /// - `POST /revoke` - Revoke tokens with Discord
-/// - `POST /logout` - Clear local tokens
+/// - `POST /logout` - Delete the session cookie and clear local tokens
 /// - `GET /me` - Get current user info
+/// - `GET /login` - Start the website flow (redirect to Discord)
+/// - `GET /callback` - Finish the website flow (sets the session cookie)
 pub fn auth_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/exchange", post(exchange_code))
@@ -39,6 +42,8 @@ pub fn auth_router() -> Router<Arc<AppState>> {
         .route("/revoke", post(revoke_token))
         .route("/logout", post(logout))
         .route("/me", get(get_current_user))
+        .route("/login", get(super::web::login))
+        .route("/callback", get(super::web::callback))
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,28 +109,33 @@ struct DiscordEntitlementResponse {
     consumed: bool,
 }
 
-/// Exchange Discord authorization code for access token and create user session.
-pub async fn exchange_code(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<CodeExchangeRequest>,
-) -> Result<Json<TokenResponse>, StatusCode> {
-    tracing::info!("Exchanging authorization code for access token");
+/// A completed Discord login: our JWT and Discord's own access token.
+pub(crate) struct Login {
+    pub jwt: String,
+    pub discord_access_token: String,
+}
 
+/// Exchange `code` with Discord, upsert the user, refresh entitlements, and
+/// mint our JWT. Shared by the SDK flow (`POST /exchange`) and the website
+/// flow (`GET /callback`), so the two cannot drift.
+pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login, StatusCode> {
     // Exchange authorization code for Discord access token
-    let discord_token = exchange_code_with_discord(&state, &payload.code)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to exchange code with Discord: {}", e);
-            StatusCode::UNAUTHORIZED
-        })?;
+    let discord_token = exchange_code_with_discord(state, code).await.map_err(|e| {
+        tracing::error!("Failed to exchange code with Discord: {}", e);
+        StatusCode::UNAUTHORIZED
+    })?;
 
     // Get user info from Discord API
-    let discord_user = get_discord_user_info(&discord_token.access_token, &state.http_client)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get Discord user info: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let discord_user = get_discord_user_info(
+        &state.config.discord.api_base,
+        &discord_token.access_token,
+        &state.http_client,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to get Discord user info: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Parse Discord user ID (u64 snowflake stored as i64)
     let user_id = discord_user.id.parse::<u64>().map_err(|e| {
@@ -161,9 +171,9 @@ pub async fn exchange_code(
 
     // Fetch and process user entitlements for premium status
     if state.config.discord.premium_sku_id.is_some() {
-        match fetch_user_entitlements(&state, user_id).await {
+        match fetch_user_entitlements(state, user_id).await {
             Ok(entitlements) => {
-                if let Err(e) = process_user_entitlements(&state, user_id, entitlements).await {
+                if let Err(e) = process_user_entitlements(state, user_id, entitlements).await {
                     tracing::warn!("Failed to process entitlements for user {}: {}", user_id, e);
                 }
             }
@@ -190,9 +200,22 @@ pub async fn exchange_code(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
+    Ok(Login {
+        jwt: jwt_token,
+        discord_access_token: discord_token.access_token,
+    })
+}
+
+/// Exchange Discord authorization code for access token and create user session.
+pub async fn exchange_code(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CodeExchangeRequest>,
+) -> Result<Json<TokenResponse>, StatusCode> {
+    tracing::info!("Exchanging authorization code for access token");
+    let login = complete_login(&state, &payload.code).await?;
     Ok(Json(TokenResponse {
-        access_token: jwt_token,
-        discord_access_token: Some(discord_token.access_token),
+        access_token: login.jwt,
+        discord_access_token: Some(login.discord_access_token),
     }))
 }
 
@@ -325,28 +348,27 @@ pub async fn revoke_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Log out the user by clearing their stored tokens.
+/// Log out: always delete the session cookie; if the caller is
+/// authenticated, also clear their stored Discord tokens.
+///
+/// A missing or expired session is not an error here -- the cookie still has
+/// to go, or the browser keeps sending a dead token.
 pub async fn logout(
-    user: AuthenticatedUser,
+    user: Result<AuthenticatedUser, StatusCode>,
     State(state): State<Arc<AppState>>,
-) -> Result<StatusCode, StatusCode> {
-    tracing::info!("Logging out user: {} ({})", user.username, user.user_id);
-
-    state
-        .storage
-        .clear_user_tokens(user.user_id)
-        .await
-        .map_err(|e| {
+    jar: CookieJar,
+) -> (CookieJar, StatusCode) {
+    if let Ok(user) = user {
+        tracing::info!("Logging out user: {} ({})", user.username, user.user_id);
+        if let Err(e) = state.storage.clear_user_tokens(user.user_id).await {
             tracing::error!("Failed to clear tokens for logout: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    tracing::info!(
-        "Successfully logged out user: {} ({})",
-        user.username,
-        user.user_id
-    );
-    Ok(StatusCode::NO_CONTENT)
+        }
+    }
+    let jar = jar.remove(super::web::removal(
+        &state.config.web,
+        state.config.web.cookie_name.clone(),
+    ));
+    (jar, StatusCode::NO_CONTENT)
 }
 
 /// Get current user info from storage.
@@ -422,7 +444,7 @@ async fn exchange_code_with_discord(
 
     let response = state
         .http_client
-        .post("https://discord.com/api/v10/oauth2/token")
+        .post(format!("{}/oauth2/token", state.config.discord.api_base))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
             &state.config.discord.client_id,
@@ -443,11 +465,12 @@ async fn exchange_code_with_discord(
 }
 
 async fn get_discord_user_info(
+    api_base: &str,
     access_token: &str,
     http_client: &reqwest::Client,
 ) -> anyhow::Result<DiscordUser> {
     let response = http_client
-        .get("https://discord.com/api/v10/users/@me")
+        .get(format!("{api_base}/users/@me"))
         .header("Authorization", format!("Bearer {access_token}"))
         .send()
         .await?;
@@ -477,7 +500,7 @@ async fn refresh_discord_token(
 
     let response = state
         .http_client
-        .post("https://discord.com/api/v10/oauth2/token")
+        .post(format!("{}/oauth2/token", state.config.discord.api_base))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
             &state.config.discord.client_id,
@@ -502,7 +525,10 @@ async fn revoke_discord_token(state: &AppState, token: &str) -> anyhow::Result<(
 
     let response = state
         .http_client
-        .post("https://discord.com/api/v10/oauth2/token/revoke")
+        .post(format!(
+            "{}/oauth2/token/revoke",
+            state.config.discord.api_base
+        ))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
             &state.config.discord.client_id,
@@ -531,8 +557,8 @@ async fn fetch_user_entitlements(
 ) -> anyhow::Result<Vec<DiscordEntitlementResponse>> {
     let user_id_str = user_id.to_string();
     let url = format!(
-        "https://discord.com/api/v10/applications/{}/entitlements?user_id={}&exclude_ended=false",
-        state.config.discord.client_id, user_id_str
+        "{}/applications/{}/entitlements?user_id={}&exclude_ended=false",
+        state.config.discord.api_base, state.config.discord.client_id, user_id_str
     );
 
     let response = state

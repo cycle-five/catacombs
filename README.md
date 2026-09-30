@@ -1,7 +1,5 @@
 # Catacombs
 
-[![Crates.io](https://img.shields.io/crates/v/catacombs.svg)](https://crates.io/crates/catacombs)
-[![Documentation](https://docs.rs/catacombs/badge.svg)](https://docs.rs/catacombs)
 [![CI](https://github.com/cycle-five/catacombs/actions/workflows/ci.yml/badge.svg)](https://github.com/cycle-five/catacombs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -23,8 +21,10 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-catacombs = "0.0.1"
+catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0" }
 ```
+
+catacombs is not published to crates.io yet.
 
 ### Feature Flags
 
@@ -39,13 +39,13 @@ catacombs = "0.0.1"
 
 ```toml
 # Default (PostgreSQL + rustls)
-catacombs = "0.0.1"
+catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0" }
 
 # Memory storage for testing
-catacombs = { version = "0.0.1", default-features = false, features = ["memory-storage", "rustls-tls"] }
+catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0", default-features = false, features = ["memory-storage", "rustls-tls"] }
 
 # PostgreSQL with native TLS
-catacombs = { version = "0.0.1", default-features = false, features = ["sqlx-storage", "native-tls"] }
+catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0", default-features = false, features = ["sqlx-storage", "native-tls"] }
 ```
 
 ## Quick Start
@@ -56,8 +56,6 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-
     // Load configuration from environment
     let config = Config::from_env()?;
 
@@ -81,6 +79,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+The snippet's own app also needs `tokio`, `sqlx` and `anyhow` in its dependencies.
 
 ## Configuration
 
@@ -111,8 +111,10 @@ The `auth_router()` provides these endpoints:
 | POST | `/exchange` | Exchange Discord auth code for tokens |
 | POST | `/refresh` | Refresh OAuth tokens |
 | POST | `/revoke` | Revoke tokens with Discord |
-| POST | `/logout` | Clear local tokens |
+| POST | `/logout` | Delete the session cookie and clear local tokens (always 204) |
 | GET | `/me` | Get current user info |
+| GET | `/login` | Start the website flow (redirect to Discord) |
+| GET | `/callback` | Finish the website flow (sets the session cookie) |
 
 ## Authentication
 
@@ -126,15 +128,39 @@ async fn protected_handler(user: AuthenticatedUser) -> String {
 }
 ```
 
-Supports both:
+Reads the token from, in order:
+- the session cookie (set by the website flow)
 - `Authorization: Bearer <token>` header
 - `?token=<token>` query parameter (useful for WebSocket connections)
+
+## Website flow
+
+For a site (not a Discord Activity), catacombs can log users in with a browser
+redirect and keep them logged in with a cookie:
+
+- Mount `auth_router()` at `/auth`.
+- Set `DISCORD_REDIRECT_URI` to `https://<site>/auth/callback` and register the
+  same URL in the Discord developer portal. When the router is mounted at
+  `/auth`, it must be exactly `<public origin>/auth/callback`.
+- Link users to `/auth/login?return_to=/where/next`. After Discord approves,
+  `/auth/callback` checks the OAuth `state`, sets the session cookie and sends
+  the user to `return_to` (same-site paths only).
+- Protect handlers with the `AuthenticatedUser` extractor.
+- Tune it with `Config.web` (`WebConfig`): `scopes`, `cookie_name` and
+  `secure_cookies`. `DISCORD_API_BASE` overrides Discord's API URL (for tests).
+- `POST /auth/logout` signs out: it deletes the cookie and clears stored tokens.
+- The session is a `SameSite=Lax`, HttpOnly cookie, so state-changing endpoints
+  should additionally require a JSON content type or check `Origin`.
+- catacombs' own `POST /refresh`, `/revoke` and `/logout` accept the session
+  cookie and rely on `SameSite=Lax`. A same-site attacker (for example on a
+  sibling subdomain) is not blocked, so host the site on a domain whose
+  subdomains you control.
 
 ## Development
 
 ### Prerequisites
 
-- Rust 1.75.0 or later
+- Rust 1.88.0 or later
 - Docker and Docker Compose (for local PostgreSQL)
 
 ### Setup

@@ -12,6 +12,9 @@ pub struct Config {
     /// Server configuration.
     #[serde(default)]
     pub server: ServerConfig,
+    /// The website flow: `/login`, `/callback` and the session cookie.
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 /// Discord `OAuth2` and API configuration.
@@ -28,6 +31,10 @@ pub struct DiscordConfig {
     /// Optional SKU ID for premium subscription entitlements.
     #[serde(default)]
     pub premium_sku_id: Option<i64>,
+    /// Base URL of Discord's REST API. Overridable so tests can point the
+    /// token and user calls at a local mock.
+    #[serde(default = "default_api_base")]
+    pub api_base: String,
 }
 
 /// Security configuration.
@@ -48,6 +55,48 @@ pub struct ServerConfig {
     /// Port to listen on.
     #[serde(default = "default_port")]
     pub port: u16,
+}
+
+/// Settings for the browser redirect flow and its session cookie.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebConfig {
+    /// OAuth scopes requested at `/login`.
+    #[serde(default = "default_scopes")]
+    pub scopes: Vec<String>,
+    /// Name of the cookie holding the session JWT.
+    #[serde(default = "default_cookie_name")]
+    pub cookie_name: String,
+    /// Mark cookies `Secure`. Browsers accept `Secure` cookies on
+    /// `http://localhost`, so this stays on even for local development.
+    #[serde(default = "default_true")]
+    pub secure_cookies: bool,
+}
+
+fn default_scopes() -> Vec<String> {
+    vec!["identify".to_string()]
+}
+
+fn default_cookie_name() -> String {
+    "catacombs_session".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            scopes: default_scopes(),
+            cookie_name: default_cookie_name(),
+            secure_cookies: true,
+        }
+    }
+}
+
+/// Discord's REST API, version 10.
+pub fn default_api_base() -> String {
+    "https://discord.com/api/v10".to_string()
 }
 
 fn default_host() -> String {
@@ -76,6 +125,7 @@ impl Config {
     /// - `DISCORD_REDIRECT_URI`
     /// - `DISCORD_BOT_TOKEN`
     /// - `DISCORD_PREMIUM_SKU_ID` (optional)
+    /// - `DISCORD_API_BASE` (optional, defaults to Discord's v10 API)
     /// - `JWT_SECRET`
     /// - `ENCRYPTION_KEY`
     /// - `HOST` (optional, defaults to "0.0.0.0")
@@ -93,6 +143,7 @@ impl Config {
             premium_sku_id: std::env::var("DISCORD_PREMIUM_SKU_ID")
                 .ok()
                 .and_then(|s| s.parse().ok()),
+            api_base: std::env::var("DISCORD_API_BASE").unwrap_or_else(|_| default_api_base()),
         };
 
         let security = SecurityConfig {
@@ -114,6 +165,7 @@ impl Config {
             discord,
             security,
             server,
+            web: WebConfig::default(),
         })
     }
 }

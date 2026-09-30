@@ -16,7 +16,6 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     dotenvy::dotenv().ok();
 //!     let config = Config::from_env()?;
 //!     let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
 //!     let storage = SqlxStorage::new(pool);
@@ -45,7 +44,7 @@ pub mod storage;
 // Re-exports for convenience
 use std::sync::Arc;
 
-pub use config::{Config, ConfigError, DiscordConfig, SecurityConfig, ServerConfig};
+pub use config::{Config, ConfigError, DiscordConfig, SecurityConfig, ServerConfig, WebConfig};
 pub use error::{Error, Result, StorageError};
 pub use models::{SubscriptionSource, SubscriptionTier, User};
 #[cfg(feature = "memory-storage")]

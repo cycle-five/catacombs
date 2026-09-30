@@ -27,6 +27,32 @@ pub struct Claims {
     pub exp: i64,
 }
 
+/// How long a session lasts: the JWT's lifetime and the cookie's `Max-Age`.
+pub const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// Find the session token: the session cookie first, then an
+/// `Authorization: Bearer` header, then a `?token=` query parameter.
+pub(crate) fn token_from_parts(parts: &Parts, cookie_name: &str) -> Option<String> {
+    let jar = axum_extra::extract::cookie::CookieJar::from_headers(&parts.headers);
+    jar.get(cookie_name)
+        .map(|c| c.value().to_owned())
+        .or_else(|| {
+            parts
+                .headers
+                .get(header::AUTHORIZATION)
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "))
+                .map(String::from)
+        })
+        .or_else(|| {
+            parts
+                .uri
+                .query()
+                .and_then(|q| serde_urlencoded::from_str::<HashMap<String, String>>(q).ok())
+                .and_then(|params| params.get("token").cloned())
+        })
+}
+
 /// Authenticated user extracted from JWT token.
 ///
 /// This can be used as an Axum extractor to require authentication.
@@ -40,9 +66,10 @@ pub struct AuthenticatedUser {
 
 /// Extractor for authenticated users from JWT tokens.
 ///
-/// Supports two authentication methods:
-/// 1. `Authorization: Bearer <token>` header
-/// 2. `?token=<token>` query parameter (useful for WebSocket connections)
+/// The token is looked for, in order, in:
+/// 1. the session cookie (`config.web.cookie_name`)
+/// 2. `Authorization: Bearer <token>`
+/// 3. `?token=<token>` (useful for WebSocket connections)
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -56,24 +83,7 @@ where
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         let app_state = Arc::<AppState>::from_ref(state);
 
-        // Try to extract token from Authorization header first
-        let token = parts
-            .headers
-            .get(header::AUTHORIZATION)
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))
-            .map(String::from)
-            // If no Authorization header, try query parameter
-            .or_else(|| {
-                parts
-                    .uri
-                    .query()
-                    .and_then(|q| {
-                        serde_urlencoded::from_str::<HashMap<String, String>>(q)
-                            .ok()
-                    })
-                    .and_then(|params| params.get("token").cloned())
-            });
+        let token = token_from_parts(parts, &app_state.config.web.cookie_name);
 
         async move {
             let token = token.ok_or(StatusCode::UNAUTHORIZED)?;
@@ -102,7 +112,7 @@ where
 
 /// Generate a JWT token for a user.
 ///
-/// The token expires after 24 hours.
+/// The token expires after [`SESSION_TTL_SECS`].
 /// # Errors
 ///    - Returns `jsonwebtoken::errors::Error` if token generation fails.
 /// # Panics
@@ -113,10 +123,10 @@ pub fn generate_token(
     jwt_secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
     let expiration = chrono::Utc::now()
-        .checked_add_signed(chrono::Duration::hours(24))
+        .checked_add_signed(chrono::Duration::seconds(SESSION_TTL_SECS))
         .expect("valid timestamp")
         .timestamp();
- 
+
     let claims = Claims {
         sub: user_id.to_string(),
         username: username.to_string(),
@@ -299,5 +309,60 @@ mod tests {
         let cloned = user.clone();
         assert_eq!(user.user_id, cloned.user_id);
         assert_eq!(user.username, cloned.username);
+    }
+
+    fn parts(headers: &[(&str, &str)], uri: &str) -> axum::http::request::Parts {
+        let mut req = axum::http::Request::builder().uri(uri);
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        req.body(()).unwrap().into_parts().0
+    }
+
+    #[test]
+    fn the_session_cookie_wins_over_the_header() {
+        let p = parts(
+            &[
+                ("cookie", "other=1; catacombs_session=from-cookie"),
+                ("authorization", "Bearer from-header"),
+            ],
+            "/?token=from-query",
+        );
+        assert_eq!(
+            token_from_parts(&p, "catacombs_session").as_deref(),
+            Some("from-cookie")
+        );
+    }
+
+    #[test]
+    fn the_header_then_the_query_are_fallbacks() {
+        let header_only = parts(&[("authorization", "Bearer from-header")], "/?token=q");
+        assert_eq!(
+            token_from_parts(&header_only, "catacombs_session").as_deref(),
+            Some("from-header")
+        );
+        let query_only = parts(&[], "/?token=from-query");
+        assert_eq!(
+            token_from_parts(&query_only, "catacombs_session").as_deref(),
+            Some("from-query")
+        );
+        assert_eq!(
+            token_from_parts(&parts(&[], "/"), "catacombs_session"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_cookie_with_another_name_is_not_a_session() {
+        let p = parts(&[("cookie", "catacombs_session_old=x")], "/");
+        assert_eq!(token_from_parts(&p, "catacombs_session"), None);
+    }
+
+    #[test]
+    fn tokens_live_as_long_as_the_session_cookie() {
+        let before = chrono::Utc::now().timestamp();
+        let token = generate_token(1, "u", TEST_JWT_SECRET).unwrap();
+        let exp = validate_token(&token, TEST_JWT_SECRET).unwrap().exp;
+        assert!((exp - before - SESSION_TTL_SECS).abs() <= 2);
     }
 }

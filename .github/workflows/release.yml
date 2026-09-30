@@ -12,6 +12,8 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    env:
+      CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,7 +29,12 @@ jobs:
           fi
 
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+        if: env.CRATES_IO_TOKEN != ''
+        run: cargo publish --token "$CRATES_IO_TOKEN"
+
+      - name: Note that crates.io publishing is off
+        if: env.CRATES_IO_TOKEN == ''
+        run: echo "::notice::CRATES_IO_TOKEN is not set, so this tag makes a GitHub release and does not publish to crates.io."
 
   github-release:
     name: Create GitHub Release
