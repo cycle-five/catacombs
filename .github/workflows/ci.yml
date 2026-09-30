@@ -80,9 +80,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write
     steps:
       - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2
+      # cargo-audit directly rather than rustsec/audit-check, whose latest
+      # release (v2.0.0) still targets the deprecated Node 20 runtime. It reads
+      # the same .cargo/audit.toml and fails the job on any advisory not ignored there.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      - run: cargo audit
