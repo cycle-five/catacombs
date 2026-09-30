@@ -32,6 +32,8 @@ use crate::{
 /// - `POST /revoke` - Revoke tokens with Discord
 /// - `POST /logout` - Clear local tokens
 /// - `GET /me` - Get current user info
+/// - `GET /login` - Start the website flow (redirect to Discord)
+/// - `GET /callback` - Finish the website flow (sets the session cookie)
 pub fn auth_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/exchange", post(exchange_code))
@@ -39,6 +41,8 @@ pub fn auth_router() -> Router<Arc<AppState>> {
         .route("/revoke", post(revoke_token))
         .route("/logout", post(logout))
         .route("/me", get(get_current_user))
+        .route("/login", get(super::web::login))
+        .route("/callback", get(super::web::callback))
 }
 
 #[derive(Debug, Deserialize)]
