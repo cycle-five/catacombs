@@ -1,0 +1,7 @@
+[advisories]
+# RUSTSEC-2023-0071 (Marvin timing side channel): `rsa` is compiled in every feature
+# set, through jsonwebtoken's `rust_crypto` backend, and no patched release exists.
+# It is not reachable: catacombs only signs and verifies HS256 tokens with
+# `EncodingKey::from_secret` / `DecodingKey::from_secret`, so no RSA private-key
+# operation ever runs. Revisit when `rsa` publishes a fix.
+ignore = ["RUSTSEC-2023-0071"]

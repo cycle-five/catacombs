@@ -25,6 +25,10 @@ pub struct MemoryStorage {
 }
 
 #[derive(Debug, Clone)]
+#[expect(
+    dead_code,
+    reason = "mirrors the entitlements table row; memory storage writes every field but only tests read them back"
+)]
 struct StoredEntitlement {
     entitlement_id: i64,
     user_id: i64,

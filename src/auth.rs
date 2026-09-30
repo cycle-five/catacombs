@@ -116,7 +116,7 @@ pub fn generate_token(
         .checked_add_signed(chrono::Duration::hours(24))
         .expect("valid timestamp")
         .timestamp();
- 
+
     let claims = Claims {
         sub: user_id.to_string(),
         username: username.to_string(),

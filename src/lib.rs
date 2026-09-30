@@ -16,7 +16,6 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     dotenvy::dotenv().ok();
 //!     let config = Config::from_env()?;
 //!     let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
 //!     let storage = SqlxStorage::new(pool);

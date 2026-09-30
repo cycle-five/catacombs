@@ -35,7 +35,7 @@ pub struct User {
 
 impl User {
     /// Returns true if the user has an active premium subscription.
-    #[must_use] 
+    #[must_use]
     pub fn is_premium(&self) -> bool {
         if !self.subscription_tier.is_premium() {
             return false;
@@ -49,7 +49,7 @@ impl User {
     }
 
     /// Returns the display name for the user, preferring `global_name` over username.
-    #[must_use] 
+    #[must_use]
     pub fn display_name(&self) -> &str {
         self.global_name.as_deref().unwrap_or(&self.username)
     }

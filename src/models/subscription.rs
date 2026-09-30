@@ -15,7 +15,7 @@ pub enum SubscriptionTier {
 
 impl SubscriptionTier {
     /// Returns true if this tier grants premium access.
-    #[must_use] 
+    #[must_use]
     pub fn is_premium(&self) -> bool {
         matches!(self, Self::Premium)
     }
