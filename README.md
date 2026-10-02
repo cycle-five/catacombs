@@ -3,200 +3,117 @@
 [![CI](https://github.com/cycle-five/catacombs/actions/workflows/ci.yml/badge.svg)](https://github.com/cycle-five/catacombs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Discord OAuth2 library for Rust with user management and subscription support. Built on Axum, SQLx, and Tokio with rustls by default.
+<!-- Opening prose goes here. -->
 
-## Features
+## What it does
 
-- **Discord OAuth2** - Complete OAuth2 flow with code exchange, token refresh, and revocation
-- **User Management** - Store and manage Discord users with subscription tiers
-- **Discord Entitlements** - Integrate with Discord's monetization API for premium features
-- **Feature-flagged Storage** - Choose between PostgreSQL (SQLx) or in-memory storage
-- **Feature-flagged TLS** - Choose between rustls (default) or native-tls (OpenSSL)
-- **Secure Token Storage** - Refresh tokens encrypted at rest with AES-256-GCM
-- **Axum Integration** - Ready-to-use router and authentication extractors
+Catacombs adds "Log in with Discord" to a Rust web service built on axum. It
+runs the OAuth2 exchange with Discord, remembers who has signed in, and gives
+your handlers an `AuthenticatedUser` so they never touch a token themselves.
+If you sell a premium tier through Discord, it can also record each user's
+entitlements when they log in.
 
-## Installation
+There are two ways to log in. A Discord Activity or a single-page app that
+already has an authorization code posts it to `/auth/exchange` and gets a JWT
+back. A normal website sends people to `/auth/login` instead. Catacombs
+redirects them to Discord, checks the `state` that comes back, sets an HttpOnly
+session cookie, and returns them to the page they started from. CrackTunes'
+web dashboard signs in this second way.
 
-Add to your `Cargo.toml`:
+## Using it
+
+Catacombs is not on crates.io yet, so depend on it by git tag:
 
 ```toml
 [dependencies]
 catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0" }
 ```
 
-catacombs is not published to crates.io yet.
+By default it keeps users in PostgreSQL through SQLx and uses rustls for TLS.
+The `memory-storage` feature swaps the database for an in-process map, which
+suits tests and small services that can afford to forget everyone on a
+restart. Be aware that memory storage keeps Discord refresh tokens in
+plaintext, while the database encrypts them with AES-256-GCM. The `native-tls`
+feature uses the system's OpenSSL in place of rustls. To use either one, turn
+off the default features and name both a storage and a TLS feature, for
+example `default-features = false, features = ["memory-storage", "rustls-tls"]`.
 
-### Feature Flags
-
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `sqlx-storage` | Yes | PostgreSQL storage via SQLx |
-| `memory-storage` | No | In-memory storage for testing |
-| `rustls-tls` | Yes | Pure Rust TLS (no system dependencies) |
-| `native-tls` | No | System OpenSSL/native TLS |
-
-#### Examples
-
-```toml
-# Default (PostgreSQL + rustls)
-catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0" }
-
-# Memory storage for testing
-catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0", default-features = false, features = ["memory-storage", "rustls-tls"] }
-
-# PostgreSQL with native TLS
-catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0", default-features = false, features = ["sqlx-storage", "native-tls"] }
-```
-
-## Quick Start
+Mounting the router is most of the work:
 
 ```rust
-use catacombs::{AppState, Config, SqlxStorage, routes};
+use catacombs::{routes, AppState, Config, SqlxStorage};
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Load configuration from environment
-    let config = Config::from_env()?;
+let config = Config::from_env()?;
+let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+let storage = SqlxStorage::new(pool);
+storage.migrate().await?;
 
-    // Set up PostgreSQL storage
-    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
-    let storage = SqlxStorage::new(pool);
-    storage.migrate().await?;
-
-    // Create application state
-    let state = Arc::new(AppState::new(config, storage));
-
-    // Build Axum router with auth routes
-    let app = axum::Router::new()
-        .nest("/auth", routes::auth_router())
-        .with_state(state);
-
-    // Start server
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
+let app = axum::Router::new()
+    .nest("/auth", routes::auth_router())
+    .with_state(Arc::new(AppState::new(config, storage)));
 ```
 
-The snippet's own app also needs `tokio`, `sqlx` and `anyhow` in its dependencies.
-
-## Configuration
-
-Set the following environment variables (see `.env.example`):
+`Config::from_env` reads the settings below, and `.env.example` has the full
+set with comments. `DATABASE_URL` is only read by the snippet above.
+`DISCORD_PREMIUM_SKU_ID` is optional, and entitlements are only fetched when it
+is set.
 
 ```bash
-# Required
-DATABASE_URL=postgresql://postgres:password@localhost:5432/catacombs
-DISCORD_CLIENT_ID=your_client_id
-DISCORD_CLIENT_SECRET=your_client_secret
-DISCORD_BOT_TOKEN=your_bot_token
-DISCORD_REDIRECT_URI=http://localhost:3000/auth/callback
-JWT_SECRET=your_jwt_secret
-ENCRYPTION_KEY=your_base64_encoded_32_byte_key  # Generate with: openssl rand -base64 32
-
-# Optional
-DISCORD_PREMIUM_SKU_ID=your_sku_id  # For Discord monetization
-HOST=0.0.0.0
-PORT=3000
+DISCORD_CLIENT_ID=...
+DISCORD_CLIENT_SECRET=...
+DISCORD_BOT_TOKEN=...
+DISCORD_REDIRECT_URI=https://example.com/auth/callback
+JWT_SECRET=...
+ENCRYPTION_KEY=...             # openssl rand -base64 32
+DISCORD_PREMIUM_SKU_ID=...     # optional
 ```
 
-## API Endpoints
-
-The `auth_router()` provides these endpoints:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/exchange` | Exchange Discord auth code for tokens |
-| POST | `/refresh` | Refresh OAuth tokens |
-| POST | `/revoke` | Revoke tokens with Discord |
-| POST | `/logout` | Delete the session cookie and clear local tokens (always 204) |
-| GET | `/me` | Get current user info |
-| GET | `/login` | Start the website flow (redirect to Discord) |
-| GET | `/callback` | Finish the website flow (sets the session cookie) |
-
-## Authentication
-
-Use the `AuthenticatedUser` extractor in your handlers:
+In a handler, ask for an `AuthenticatedUser`, and requests without a valid
+session are turned away before they reach your code:
 
 ```rust
 use catacombs::auth::AuthenticatedUser;
 
-async fn protected_handler(user: AuthenticatedUser) -> String {
+async fn hello(user: AuthenticatedUser) -> String {
     format!("Hello, {}!", user.username)
 }
 ```
 
-Reads the token from, in order:
-- the session cookie (set by the website flow)
-- `Authorization: Bearer <token>` header
-- `?token=<token>` query parameter (useful for WebSocket connections)
+The extractor looks for the session cookie first, then an
+`Authorization: Bearer` header, and finally a `?token=` query parameter. That
+last one is for WebSocket clients, which can't set headers.
 
-## Website flow
+For the website flow, register `<your origin>/auth/callback` as a redirect in
+the Discord developer portal, and set `DISCORD_REDIRECT_URI` to the same URL.
+Then link people to `/auth/login?return_to=/where/next`. Only same-site paths
+are accepted for `return_to`. `POST /auth/logout` signs someone out. Scopes,
+the cookie's name and its `Secure` flag live in `WebConfig`.
 
-For a site (not a Discord Activity), catacombs can log users in with a browser
-redirect and keep them logged in with a cookie:
+The session cookie is `SameSite=Lax`. That keeps other sites out, but not your
+own subdomains. Host the site on a domain whose subdomains you control, and
+have your own state-changing endpoints check `Origin` or require a JSON body.
 
-- Mount `auth_router()` at `/auth`.
-- Set `DISCORD_REDIRECT_URI` to `https://<site>/auth/callback` and register the
-  same URL in the Discord developer portal. When the router is mounted at
-  `/auth`, it must be exactly `<public origin>/auth/callback`.
-- Link users to `/auth/login?return_to=/where/next`. After Discord approves,
-  `/auth/callback` checks the OAuth `state`, sets the session cookie and sends
-  the user to `return_to` (same-site paths only).
-- Protect handlers with the `AuthenticatedUser` extractor.
-- Tune it with `Config.web` (`WebConfig`): `scopes`, `cookie_name` and
-  `secure_cookies`. `DISCORD_API_BASE` overrides Discord's API URL (for tests).
-- `POST /auth/logout` signs out: it deletes the cookie and clears stored tokens.
-- The session is a `SameSite=Lax`, HttpOnly cookie, so state-changing endpoints
-  should additionally require a JSON content type or check `Origin`.
-- catacombs' own `POST /refresh`, `/revoke` and `/logout` accept the session
-  cookie and rely on `SameSite=Lax`. A same-site attacker (for example on a
-  sibling subdomain) is not blocked, so host the site on a domain whose
-  subdomains you control.
+The rest of the router refreshes and revokes Discord tokens, and returns the
+current user from `/auth/me`. The rustdoc covers each route.
 
-## Development
+## Working on it
 
-### Prerequisites
-
-- Rust 1.88.0 or later
-- Docker and Docker Compose (for local PostgreSQL)
-
-### Setup
+You need Rust 1.88 or newer, and no database: the integration tests run
+against memory storage and a mock Discord. CI builds and tests three feature
+sets, so when you change anything feature-gated, run all three:
 
 ```bash
-# Clone the repository
-git clone https://github.com/cycle-five/catacombs.git
-cd catacombs
-
-# Start PostgreSQL
-docker compose up -d
-
-# Copy environment template
-cp .env.example .env
-# Edit .env with your Discord credentials
-
-# Run tests
 cargo test
-
-# Run tests with memory storage
 cargo test --no-default-features --features "memory-storage,rustls-tls"
-```
-
-### Running Tests
-
-```bash
-# All tests with default features
-cargo test
-
-# With memory storage
-cargo test --no-default-features --features "memory-storage,rustls-tls"
-
-# With native TLS
 cargo test --no-default-features --features "sqlx-storage,native-tls"
 ```
 
+Where things are going next is in [ROADMAP.md](ROADMAP.md), and what has
+changed is in [CHANGELOG.md](CHANGELOG.md).
+
+<!-- Closing prose goes here. -->
+
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
