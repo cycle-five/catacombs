@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::{self, AuthenticatedUser},
-    models::{EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, UserUpsertParams},
+    models::{
+        DiscordProfile, EncryptedToken, Entitlement, StoredTokens, Subscription,
+        SubscriptionSource, SubscriptionTier,
+    },
     Auth, HasAuth,
 };
 
@@ -141,25 +144,26 @@ pub(crate) async fn complete_login(auth: &Auth, code: &str) -> Result<Login, Sta
         StatusCode::INTERNAL_SERVER_ERROR
     })? as i64;
 
-    // Build avatar URL
-    let avatar_url = build_avatar_url(&discord_user);
-
     // Calculate token expiration
     let token_expires_at = Utc::now() + chrono::Duration::seconds(discord_token.expires_in);
 
     // Create or update user in storage
-    auth.storage()
-        .upsert_user(
-            UserUpsertParams {
-                user_id,
-                username: &discord_user.username,
-                global_name: discord_user.global_name.as_deref(),
-                avatar_url: Some(&avatar_url.clone()),
-                refresh_token: Some(&discord_token.refresh_token),
-                token_expires_at: Some(token_expires_at),
-            },
+    let mut profile = DiscordProfile::new(user_id, discord_user.username.clone());
+    profile.global_name = discord_user.global_name.clone();
+    profile.avatar_url = Some(build_avatar_url(&discord_user));
+    let tokens = StoredTokens {
+        refresh_token: EncryptedToken::encrypt(
+            &discord_token.refresh_token,
             &auth.config().security.encryption_key,
         )
+        .map_err(|e| {
+            tracing::error!("Failed to encrypt refresh token: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?,
+        expires_at: token_expires_at,
+    };
+    auth.storage()
+        .upsert_user(&profile, Some(&tokens))
         .await
         .map_err(|e| {
             tracing::error!("Failed to create/update user in storage: {}", e);
@@ -232,7 +236,7 @@ pub async fn refresh_token<S: HasAuth + Clone>(
     // Get user with refresh token from storage
     let db_user = auth
         .storage()
-        .get_user(user.user_id, &auth.config().security.encryption_key)
+        .get_user(user.user_id)
         .await
         .map_err(|e| {
             tracing::error!("Storage error fetching user for refresh: {}", e);
@@ -242,10 +246,14 @@ pub async fn refresh_token<S: HasAuth + Clone>(
             tracing::warn!("User not found for token refresh: {}", user.user_id);
             StatusCode::NOT_FOUND
         })?;
-
-    let current_refresh_token = db_user.refresh_token.ok_or_else(|| {
+    let stored = db_user.tokens.ok_or_else(|| {
         tracing::warn!("No refresh token stored for user: {}", user.user_id);
         StatusCode::UNAUTHORIZED
+    })?;
+    let key = &auth.config().security.encryption_key;
+    let current_refresh_token = stored.refresh_token.decrypt(key).map_err(|e| {
+        tracing::error!("Failed to decrypt the stored refresh token: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
     // Refresh with Discord
@@ -256,16 +264,16 @@ pub async fn refresh_token<S: HasAuth + Clone>(
             StatusCode::UNAUTHORIZED
         })?;
 
-    let token_expires_at = Utc::now() + chrono::Duration::seconds(discord_token.expires_in);
-
     // Store new refresh token
+    let new_tokens = StoredTokens {
+        refresh_token: EncryptedToken::encrypt(&discord_token.refresh_token, key).map_err(|e| {
+            tracing::error!("Failed to encrypt refresh token: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?,
+        expires_at: Utc::now() + chrono::Duration::seconds(discord_token.expires_in),
+    };
     auth.storage()
-        .update_refresh_token(
-            user.user_id,
-            &discord_token.refresh_token,
-            token_expires_at,
-            &auth.config().security.encryption_key,
-        )
+        .set_tokens(user.user_id, Some(&new_tokens))
         .await
         .map_err(|e| {
             tracing::error!("Failed to update refresh token in storage: {}", e);
@@ -308,30 +316,32 @@ pub async fn revoke_token<S: HasAuth + Clone>(
     );
 
     // Get user with refresh token
-    let db_user = auth
-        .storage()
-        .get_user(user.user_id, &auth.config().security.encryption_key)
-        .await
-        .map_err(|e| {
-            tracing::error!("Storage error fetching user for revoke: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let db_user = auth.storage().get_user(user.user_id).await.map_err(|e| {
+        tracing::error!("Storage error fetching user for revoke: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Revoke with Discord if we have a refresh token
-    if let Some(user_data) = db_user {
-        if let Some(refresh_token) = user_data.refresh_token {
-            if let Err(e) = revoke_discord_token(auth, &refresh_token).await {
-                tracing::warn!(
-                    "Failed to revoke token with Discord (continuing anyway): {}",
-                    e
-                );
+    if let Some(stored) = db_user.and_then(|u| u.tokens) {
+        match stored
+            .refresh_token
+            .decrypt(&auth.config().security.encryption_key)
+        {
+            Ok(refresh_token) => {
+                if let Err(e) = revoke_discord_token(auth, &refresh_token).await {
+                    tracing::warn!(
+                        "Failed to revoke token with Discord (continuing anyway): {}",
+                        e
+                    );
+                }
             }
+            Err(e) => tracing::warn!("Stored refresh token unreadable, not revoked: {e}"),
         }
     }
 
     // Clear tokens from storage
     auth.storage()
-        .clear_user_tokens(user.user_id)
+        .set_tokens(user.user_id, None)
         .await
         .map_err(|e| {
             tracing::error!("Failed to clear tokens from storage: {}", e);
@@ -359,7 +369,7 @@ pub async fn logout<S: HasAuth + Clone>(
     let auth = state.auth();
     if let Ok(user) = user {
         tracing::info!("Logging out user: {} ({})", user.username, user.user_id);
-        if let Err(e) = auth.storage().clear_user_tokens(user.user_id).await {
+        if let Err(e) = auth.storage().set_tokens(user.user_id, None).await {
             tracing::error!("Failed to clear tokens for logout: {}", e);
         }
     }
@@ -384,7 +394,7 @@ pub async fn get_current_user<S: HasAuth + Clone>(
 
     let db_user = auth
         .storage()
-        .get_user(user.user_id, &auth.config().security.encryption_key)
+        .get_user(user.user_id)
         .await
         .map_err(|e| {
             tracing::error!("Storage error fetching user: {}", e);
@@ -622,7 +632,7 @@ async fn process_user_entitlements(
         // Store entitlement
         if let Err(e) = auth
             .storage()
-            .upsert_entitlement(EntitlementUpsertParams {
+            .upsert_entitlement(&Entitlement {
                 entitlement_id: ent_id,
                 user_id,
                 sku_id,
@@ -663,11 +673,13 @@ async fn process_user_entitlements(
     // Update user's subscription tier
     if highest_tier != SubscriptionTier::Free {
         auth.storage()
-            .update_subscription(
+            .set_subscription(
                 user_id,
-                highest_tier,
-                SubscriptionSource::Discord,
-                subscription_expires,
+                Some(&Subscription {
+                    tier: highest_tier,
+                    source: SubscriptionSource::Discord,
+                    expires_at: subscription_expires,
+                }),
             )
             .await?;
         tracing::info!(

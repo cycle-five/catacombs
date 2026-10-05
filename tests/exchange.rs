@@ -8,7 +8,7 @@ use axum::{
     Router,
 };
 use base64::Engine;
-use catacombs::{auth::validate_token, routes::auth_router};
+use catacombs::{auth::validate_token, routes::auth_router, Storage};
 use common::*;
 use tower::ServiceExt;
 
@@ -70,4 +70,49 @@ async fn a_rejected_code_is_401_and_never_fetches_the_user() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(rec.token_requests.lock().unwrap().len(), 1);
     assert!(rec.me_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_refresh_token_is_stored_only_as_ciphertext() {
+    let (base, _rec) = spawn_mock_discord().await;
+    let (state, storage) = test_state_with_storage(&base);
+
+    let resp = auth_router()
+        .with_state(state)
+        .oneshot(exchange("good-code"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let user = storage
+        .get_user(MOCK_USER_ID.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let stored = user.tokens.expect("tokens stored");
+    assert!(!stored.refresh_token.as_str().contains(MOCK_REFRESH_TOKEN));
+}
+
+#[tokio::test]
+async fn refresh_decrypts_the_stored_token_and_sends_it_to_discord() {
+    let (base, rec) = spawn_mock_discord().await;
+    let app = auth_router().with_state(test_state(&base));
+
+    let resp = app.clone().oneshot(exchange("good-code")).await.unwrap();
+    let jwt = access_token(resp).await;
+    let resp = app
+        .oneshot(
+            Request::post("/refresh")
+                .header(header::AUTHORIZATION, format!("Bearer {jwt}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let sent = rec.token_requests.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].form["grant_type"], "refresh_token");
+    assert_eq!(sent[1].form["refresh_token"], MOCK_REFRESH_TOKEN);
 }

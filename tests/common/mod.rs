@@ -23,6 +23,7 @@ pub const REDIRECT_URI: &str = "https://dash.example/auth/callback";
 pub const JWT_SECRET: &str = "test-jwt-secret";
 pub const MOCK_USER_ID: &str = "112233445566778899";
 pub const MOCK_ACCESS_TOKEN: &str = "discord-access-token";
+pub const MOCK_REFRESH_TOKEN: &str = "discord-refresh-token";
 /// A code the mock rejects the way Discord does: 400 invalid_grant.
 pub const BAD_CODE: &str = "bad-code";
 
@@ -81,7 +82,7 @@ async fn token(
         access_token: MOCK_ACCESS_TOKEN,
         token_type: "Bearer",
         expires_in: 604_800,
-        refresh_token: "discord-refresh-token",
+        refresh_token: MOCK_REFRESH_TOKEN,
         scope: "identify",
     })
     .into_response()
@@ -133,6 +134,12 @@ pub fn test_config(api_base: &str) -> Config {
 
 pub fn test_state(api_base: &str) -> Arc<Auth> {
     Arc::new(Auth::new(test_config(api_base), MemoryStorage::new()).unwrap())
+}
+
+pub fn test_state_with_storage(api_base: &str) -> (Arc<Auth>, Arc<MemoryStorage>) {
+    let storage = Arc::new(MemoryStorage::new());
+    let auth = Auth::new(test_config(api_base), storage.clone()).unwrap();
+    (Arc::new(auth), storage)
 }
 
 pub fn post_json(uri: &str, body: &str) -> axum::http::Request<axum::body::Body> {

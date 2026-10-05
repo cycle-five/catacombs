@@ -49,6 +49,11 @@ impl sqlx::Type<sqlx::Postgres> for SubscriptionTier {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
     }
+
+    // The columns are VARCHAR; String's own check accepts every text type.
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -81,6 +86,11 @@ impl sqlx::Encode<'_, sqlx::Postgres> for SubscriptionTier {
 impl sqlx::Type<sqlx::Postgres> for SubscriptionSource {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    // The columns are VARCHAR; String's own check accepts every text type.
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
     }
 }
 

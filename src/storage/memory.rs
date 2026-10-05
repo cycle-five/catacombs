@@ -1,325 +1,242 @@
-//! In-memory storage implementation for testing.
+//! In-memory storage, for tests and for services that may forget everyone
+//! on a restart.
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use parking_lot::RwLock;
 
 use crate::{
-    error::Result,
-    models::{
-        EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, User, UserUpsertParams,
-    },
-    storage::{EntitlementStorage, UserStorage},
+    error::StorageError,
+    models::{DiscordProfile, Entitlement, StoredTokens, Subscription, SubscriptionTier, User},
+    storage::Storage,
 };
 
-/// In-memory storage backend for testing and development.
+/// In-memory storage.
 ///
-/// Note: This implementation stores refresh tokens in plaintext (no encryption)
-/// since it's intended for testing only.
+/// Refresh tokens are held as ciphertext, as in any storage. Since nothing
+/// outlives the process, the encryption key can be a fresh one per process
+/// ([`generate_key`](crate::encryption::generate_key)).
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
-    users: RwLock<HashMap<i64, User>>,
-    entitlements: RwLock<HashMap<i64, StoredEntitlement>>,
+    users: RwLock<HashMap<i64, Record>>,
+    entitlements: RwLock<HashMap<i64, Entitlement>>,
 }
 
 #[derive(Debug, Clone)]
-#[expect(
-    dead_code,
-    reason = "mirrors the entitlements table row; memory storage writes every field but only tests read them back"
-)]
-struct StoredEntitlement {
-    entitlement_id: i64,
-    user_id: i64,
-    sku_id: i64,
-    entitlement_type: i32,
-    is_test: bool,
-    consumed: bool,
-    starts_at: Option<DateTime<Utc>>,
-    ends_at: Option<DateTime<Utc>>,
+struct Record {
+    user: User,
+    /// The latest profile, with guilds merged across logins.
+    profile: DiscordProfile,
 }
 
 impl MemoryStorage {
-    /// Create a new empty in-memory storage.
+    /// Create an empty store.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Clear all stored data (useful for test cleanup).
+    /// Forget everything.
     pub fn clear(&self) {
         self.users.write().clear();
         self.entitlements.write().clear();
     }
 
-    /// Get the number of stored users.
+    /// The number of stored users.
     pub fn user_count(&self) -> usize {
         self.users.read().len()
     }
 
-    /// Get the number of stored entitlements.
+    /// The number of stored entitlements.
     pub fn entitlement_count(&self) -> usize {
         self.entitlements.read().len()
     }
+
+    /// The latest profile stored for a user, with guilds merged across logins.
+    pub fn profile(&self, user_id: i64) -> Option<DiscordProfile> {
+        self.users.read().get(&user_id).map(|r| r.profile.clone())
+    }
+
+    /// The entitlement stored under `entitlement_id`.
+    pub fn entitlement(&self, entitlement_id: i64) -> Option<Entitlement> {
+        self.entitlements.read().get(&entitlement_id).cloned()
+    }
 }
 
 #[async_trait]
-impl UserStorage for MemoryStorage {
-    async fn get_user(&self, user_id: i64, _encryption_key: &str) -> Result<Option<User>> {
-        Ok(self.users.read().get(&user_id).cloned())
+impl Storage for MemoryStorage {
+    async fn get_user(&self, user_id: i64) -> Result<Option<User>, StorageError> {
+        Ok(self.users.read().get(&user_id).map(|r| r.user.clone()))
     }
 
-    async fn upsert_user(&self, params: UserUpsertParams<'_>, _encryption_key: &str) -> Result<()> {
-        let mut users = self.users.write();
+    async fn upsert_user(
+        &self,
+        profile: &DiscordProfile,
+        tokens: Option<&StoredTokens>,
+    ) -> Result<(), StorageError> {
         let now = Utc::now();
-
-        if let Some(existing) = users.get_mut(&params.user_id) {
-            existing.username = params.username.to_string();
-            existing.global_name = params.global_name.map(String::from);
-            existing.avatar_url = params.avatar_url.map(String::from);
-            if params.refresh_token.is_some() {
-                existing.refresh_token = params.refresh_token.map(String::from);
+        let mut users = self.users.write();
+        if let Some(record) = users.get_mut(&profile.id) {
+            let mut guilds = std::mem::take(&mut record.profile.guilds);
+            guilds.extend(profile.guilds.iter().map(|(id, g)| (*id, g.clone())));
+            record.profile = DiscordProfile {
+                guilds,
+                ..profile.clone()
+            };
+            let user = &mut record.user;
+            user.username.clone_from(&profile.username);
+            user.global_name.clone_from(&profile.global_name);
+            user.avatar_url.clone_from(&profile.avatar_url);
+            if let Some(tokens) = tokens {
+                user.tokens = Some(tokens.clone());
             }
-            if params.token_expires_at.is_some() {
-                existing.token_expires_at = params.token_expires_at;
-            }
-            existing.updated_at = now;
+            user.updated_at = now;
         } else {
+            let user = User {
+                user_id: profile.id,
+                username: profile.username.clone(),
+                global_name: profile.global_name.clone(),
+                avatar_url: profile.avatar_url.clone(),
+                tokens: tokens.cloned(),
+                subscription_tier: SubscriptionTier::Free,
+                subscription_source: None,
+                subscription_expires_at: None,
+                created_at: now,
+                updated_at: now,
+            };
             users.insert(
-                params.user_id,
-                User {
-                    user_id: params.user_id,
-                    username: params.username.to_string(),
-                    global_name: params.global_name.map(String::from),
-                    avatar_url: params.avatar_url.map(String::from),
-                    refresh_token: params.refresh_token.map(String::from),
-                    token_expires_at: params.token_expires_at,
-                    subscription_tier: SubscriptionTier::Free,
-                    subscription_source: None,
-                    subscription_expires_at: None,
-                    created_at: now,
-                    updated_at: now,
+                profile.id,
+                Record {
+                    user,
+                    profile: profile.clone(),
                 },
             );
         }
-
         Ok(())
     }
 
-    async fn update_refresh_token(
+    async fn set_tokens(
         &self,
         user_id: i64,
-        refresh_token: &str,
-        token_expires_at: DateTime<Utc>,
-        _encryption_key: &str,
-    ) -> Result<()> {
-        let mut users = self.users.write();
-        if let Some(user) = users.get_mut(&user_id) {
-            user.refresh_token = Some(refresh_token.to_string());
-            user.token_expires_at = Some(token_expires_at);
-            user.updated_at = Utc::now();
+        tokens: Option<&StoredTokens>,
+    ) -> Result<(), StorageError> {
+        if let Some(record) = self.users.write().get_mut(&user_id) {
+            record.user.tokens = tokens.cloned();
+            record.user.updated_at = Utc::now();
         }
         Ok(())
     }
 
-    async fn clear_user_tokens(&self, user_id: i64) -> Result<()> {
-        let mut users = self.users.write();
-        if let Some(user) = users.get_mut(&user_id) {
-            user.refresh_token = None;
-            user.token_expires_at = None;
-            user.updated_at = Utc::now();
-        }
-        Ok(())
-    }
-
-    async fn update_subscription(
+    async fn set_subscription(
         &self,
         user_id: i64,
-        tier: SubscriptionTier,
-        source: SubscriptionSource,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<()> {
-        let mut users = self.users.write();
-        if let Some(user) = users.get_mut(&user_id) {
-            user.subscription_tier = tier;
-            user.subscription_source = Some(source);
-            user.subscription_expires_at = expires_at;
+        subscription: Option<&Subscription>,
+    ) -> Result<(), StorageError> {
+        if let Some(record) = self.users.write().get_mut(&user_id) {
+            let user = &mut record.user;
+            match subscription {
+                Some(s) => {
+                    user.subscription_tier = s.tier;
+                    user.subscription_source = Some(s.source);
+                    user.subscription_expires_at = s.expires_at;
+                }
+                None => {
+                    user.subscription_tier = SubscriptionTier::Free;
+                    user.subscription_source = None;
+                    user.subscription_expires_at = None;
+                }
+            }
             user.updated_at = Utc::now();
         }
         Ok(())
     }
-}
 
-#[async_trait]
-impl EntitlementStorage for MemoryStorage {
-    async fn upsert_entitlement(&self, params: EntitlementUpsertParams) -> Result<()> {
-        let mut entitlements = self.entitlements.write();
-        entitlements.insert(
-            params.entitlement_id,
-            StoredEntitlement {
-                entitlement_id: params.entitlement_id,
-                user_id: params.user_id,
-                sku_id: params.sku_id,
-                entitlement_type: params.entitlement_type,
-                is_test: params.is_test,
-                consumed: params.consumed,
-                starts_at: params.starts_at,
-                ends_at: params.ends_at,
-            },
-        );
+    async fn upsert_entitlement(&self, entitlement: &Entitlement) -> Result<(), StorageError> {
+        self.entitlements
+            .write()
+            .insert(entitlement.entitlement_id, entitlement.clone());
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Duration;
+    use chrono::Utc;
 
     use super::*;
+    use crate::{
+        encryption,
+        models::{EncryptedToken, GuildId, GuildProfile, SubscriptionSource},
+    };
 
-    #[tokio::test]
-    async fn test_memory_storage_user_lifecycle() {
-        let storage = MemoryStorage::new();
-        let key = "unused";
+    fn tokens(plain: &str) -> StoredTokens {
+        StoredTokens {
+            refresh_token: EncryptedToken::encrypt(plain, &encryption::generate_key()).unwrap(),
+            expires_at: Utc::now(),
+        }
+    }
 
-        // Initially no user
-        assert!(storage.get_user(123, key).await.unwrap().is_none());
-
-        // Create user
-        storage
-            .upsert_user(
-                UserUpsertParams {
-                    user_id: 123,
-                    username: "testuser",
-                    global_name: Some("Test User"),
-                    avatar_url: None,
-                    refresh_token: Some("token123"),
-                    token_expires_at: Some(Utc::now() + Duration::hours(1)),
-                },
-                key,
-            )
-            .await
-            .unwrap();
-
-        // User exists
-        let user = storage.get_user(123, key).await.unwrap().unwrap();
-        assert_eq!(user.username, "testuser");
-        assert_eq!(user.refresh_token, Some("token123".to_string()));
-
-        // Update user
-        storage
-            .upsert_user(
-                UserUpsertParams {
-                    user_id: 123,
-                    username: "newname",
-                    global_name: None,
-                    avatar_url: None,
-                    refresh_token: None,
-                    token_expires_at: None,
-                },
-                key,
-            )
-            .await
-            .unwrap();
-
-        let user = storage.get_user(123, key).await.unwrap().unwrap();
-        assert_eq!(user.username, "newname");
-        // Token preserved when not provided
-        assert_eq!(user.refresh_token, Some("token123".to_string()));
-
-        // Clear tokens
-        storage.clear_user_tokens(123).await.unwrap();
-        let user = storage.get_user(123, key).await.unwrap().unwrap();
-        assert!(user.refresh_token.is_none());
+    fn guild(nickname: &str) -> GuildProfile {
+        GuildProfile {
+            nickname: Some(nickname.into()),
+            ..GuildProfile::default()
+        }
     }
 
     #[tokio::test]
-    async fn test_memory_storage_subscription() {
+    async fn guilds_accumulate_across_logins_and_a_repeat_replaces() {
         let storage = MemoryStorage::new();
-        let key = "unused";
+        let mut first = DiscordProfile::new(1, "u");
+        first.guilds.insert(GuildId(10), guild("ten"));
+        storage.upsert_user(&first, None).await.unwrap();
 
+        let mut second = DiscordProfile::new(1, "u2");
+        second.guilds.insert(GuildId(20), guild("twenty"));
+        second.guilds.insert(GuildId(10), guild("TEN"));
+        storage.upsert_user(&second, None).await.unwrap();
+
+        let stored = storage.profile(1).unwrap();
+        assert_eq!(stored.username, "u2");
+        assert_eq!(stored.guilds.len(), 2);
+        assert_eq!(stored.guilds[&GuildId(10)].nickname.as_deref(), Some("TEN"));
+        assert_eq!(storage.get_user(1).await.unwrap().unwrap().username, "u2");
+    }
+
+    #[tokio::test]
+    async fn upsert_without_tokens_keeps_them_and_set_tokens_none_clears() {
+        let storage = MemoryStorage::new();
+        let profile = DiscordProfile::new(1, "u");
+        let t = tokens("secret");
+        storage.upsert_user(&profile, Some(&t)).await.unwrap();
+        storage.upsert_user(&profile, None).await.unwrap();
+        assert_eq!(storage.get_user(1).await.unwrap().unwrap().tokens, Some(t));
+
+        storage.set_tokens(1, None).await.unwrap();
+        assert_eq!(storage.get_user(1).await.unwrap().unwrap().tokens, None);
+    }
+
+    #[tokio::test]
+    async fn set_subscription_none_resets_to_free() {
+        let storage = MemoryStorage::new();
         storage
-            .upsert_user(
-                UserUpsertParams {
-                    user_id: 456,
-                    username: "subuser",
-                    global_name: None,
-                    avatar_url: None,
-                    refresh_token: None,
-                    token_expires_at: None,
-                },
-                key,
-            )
+            .upsert_user(&DiscordProfile::new(1, "u"), None)
             .await
             .unwrap();
-
-        // Initially free
-        let user = storage.get_user(456, key).await.unwrap().unwrap();
-        assert_eq!(user.subscription_tier, SubscriptionTier::Free);
-
-        // Upgrade
-        storage
-            .update_subscription(
-                456,
-                SubscriptionTier::Premium,
-                SubscriptionSource::Discord,
-                Some(Utc::now() + Duration::days(30)),
-            )
-            .await
-            .unwrap();
-
-        let user = storage.get_user(456, key).await.unwrap().unwrap();
-        assert_eq!(user.subscription_tier, SubscriptionTier::Premium);
+        let premium = Subscription {
+            tier: SubscriptionTier::Premium,
+            source: SubscriptionSource::Manual,
+            expires_at: None,
+        };
+        storage.set_subscription(1, Some(&premium)).await.unwrap();
+        let user = storage.get_user(1).await.unwrap().unwrap();
         assert!(user.is_premium());
-    }
+        assert_eq!(user.subscription_source, Some(SubscriptionSource::Manual));
 
-    #[tokio::test]
-    async fn test_memory_storage_entitlements() {
-        let storage = MemoryStorage::new();
-
-        assert_eq!(storage.entitlement_count(), 0);
-
-        storage
-            .upsert_entitlement(EntitlementUpsertParams {
-                entitlement_id: 1,
-                user_id: 123,
-                sku_id: 456,
-                entitlement_type: 8,
-                is_test: false,
-                consumed: false,
-                starts_at: None,
-                ends_at: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(storage.entitlement_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_memory_storage_clear() {
-        let storage = MemoryStorage::new();
-        let key = "unused";
-
-        storage
-            .upsert_user(
-                UserUpsertParams {
-                    user_id: 1,
-                    username: "user1",
-                    global_name: None,
-                    avatar_url: None,
-                    refresh_token: None,
-                    token_expires_at: None,
-                },
-                key,
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(storage.user_count(), 1);
-
-        storage.clear();
-
-        assert_eq!(storage.user_count(), 0);
+        storage.set_subscription(1, None).await.unwrap();
+        let user = storage.get_user(1).await.unwrap().unwrap();
+        assert_eq!(user.subscription_tier, SubscriptionTier::Free);
+        assert_eq!(user.subscription_source, None);
     }
 }

@@ -1,17 +1,16 @@
-//! Storage abstraction for Discord OAuth user and entitlement data.
+//! The storage seam: what catacombs asks of wherever users live.
 //!
-//! This module provides a trait-based storage abstraction with two implementations:
-//! - `SqlxStorage`: `PostgreSQL` storage via `SQLx` (feature: `sqlx-storage`)
-//! - `MemoryStorage`: In-memory storage for testing (feature: `memory-storage`)
+//! catacombs ships [`SqlxStorage`] (feature `sqlx-storage`) and
+//! [`MemoryStorage`] (feature `memory-storage`). A host with its own users
+//! table implements [`Storage`] over that table instead.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 
 use crate::{
-    error::{Result, StorageError},
-    models::{
-        EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, User, UserUpsertParams,
-    },
+    error::StorageError,
+    models::{DiscordProfile, Entitlement, StoredTokens, Subscription, User},
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -24,107 +23,78 @@ mod memory;
 #[cfg(feature = "memory-storage")]
 pub use memory::MemoryStorage;
 
-/// Storage trait for user operations.
+/// Where catacombs keeps users, their tokens and their entitlements.
+///
+/// Refresh tokens arrive and leave as [`StoredTokens`], which hold only
+/// ciphertext. An implementation persists `refresh_token.as_str()` and
+/// rebuilds it with
+/// [`EncryptedToken::from_stored`](crate::EncryptedToken::from_stored).
 #[async_trait]
-pub trait UserStorage: Send + Sync {
-    /// Get a user by their Discord user ID.
-    ///
-    /// Parameters:
-    ///     - `user_id`: `i64` - Discord user ID
-    ///     - `encryption_key`: `&str` - Encryption key used to decrypt the refresh token
-    /// Returns:
-    ///     - `Result<Option<User>>` - Retrieved user or None if not found
-    /// Errors:
-    ///     - `StorageError` - If an error occurs during retrieval
-    async fn get_user(&self, user_id: i64, encryption_key: &str) -> Result<Option<User>>;
+pub trait Storage: Send + Sync + 'static {
+    /// The user, or `None` if catacombs has never stored them.
+    async fn get_user(&self, user_id: i64) -> Result<Option<User>, StorageError>;
 
-    /// Create or update a user.
+    /// Create or update a user from a fresh Discord profile.
     ///
-    /// Parameters:
-    ///     - params: `UserUpsertParams` - Upsert parameters
-    ///     - `encryption_key`: `&str` - Encryption key used to encrypt the refresh token
-    /// Returns:
-    ///     - `Result<()>` - Success or error
-    /// Errors:
-    ///     - `StorageError` - If an error occurs during upsert
-    async fn upsert_user(&self, params: UserUpsertParams<'_>, encryption_key: &str) -> Result<()>;
+    /// - Guilds in `profile.guilds` are inserted or replaced. Guilds stored
+    ///   earlier and absent from the map are kept.
+    /// - `tokens: None` leaves any stored tokens as they are.
+    async fn upsert_user(
+        &self,
+        profile: &DiscordProfile,
+        tokens: Option<&StoredTokens>,
+    ) -> Result<(), StorageError>;
 
-    /// Update a user's refresh token.
-    ///
-    /// Parameters:
-    ///    - `user_id`: `i64` - Discord user ID
-    ///    - `refresh_token`: &str - New refresh token
-    ///    - `token_expires_at`: `DateTime<Utc>` - New token expiration time
-    ///    - `encryption_key`: &str - Encryption key used to encrypt the refresh token
-    /// Returns:
-    ///    - `Result<()>` - Success or error
-    /// Errors:
-    ///    - `StorageError` - If an error occurs during update
-    async fn update_refresh_token(
+    /// Replace the user's tokens. `None` clears them (logout, revoke).
+    async fn set_tokens(
         &self,
         user_id: i64,
-        refresh_token: &str,
-        token_expires_at: DateTime<Utc>,
-        encryption_key: &str,
-    ) -> Result<()>;
+        tokens: Option<&StoredTokens>,
+    ) -> Result<(), StorageError>;
 
-    /// Clear a user's OAuth tokens (logout).
-    /// Parameters:
-    ///   - `user_id`: `i64` - Discord user ID
-    /// Returns:
-    ///   - `Result<()>` - Success or error
-    /// Errors:
-    ///   - `StorageError` - If an error occurs during clear
-    async fn clear_user_tokens(&self, user_id: i64) -> Result<()>;
-
-    /// Update a user's subscription status.
-    ///
-    /// Parameters:
-    ///    - `user_id`: `i64` - Discord user ID
-    ///    - tier: `SubscriptionTier` - New subscription tier
-    ///    - source: `SubscriptionSource` - Source of the subscription
-    ///    - `expires_at`: `Option<DateTime<Utc>>` - Subscription expiration time
-    /// Returns:
-    ///   - `Result<()>` - Success or error
-    /// Errors:
-    ///   - `StorageError` - If an error occurs during update
-    async fn update_subscription(
+    /// Record a subscription. `None` resets the user to the free tier.
+    async fn set_subscription(
         &self,
         user_id: i64,
-        tier: SubscriptionTier,
-        source: SubscriptionSource,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<()>;
+        subscription: Option<&Subscription>,
+    ) -> Result<(), StorageError>;
+
+    /// Create or update an entitlement, keyed by `entitlement_id`.
+    async fn upsert_entitlement(&self, entitlement: &Entitlement) -> Result<(), StorageError>;
 }
 
-/// Storage trait for entitlement operations.
+/// So a host (or a test) can keep a handle on the storage it gives [`Auth`](crate::Auth).
 #[async_trait]
-pub trait EntitlementStorage: Send + Sync {
-    /// Create or update an entitlement record.
-    ///
-    /// Parameters:
-    ///     - params: `EntitlementUpsertParams` - Upsert parameters
-    /// Returns:
-    ///    - Result<()> - Success or error
-    /// Errors:
-    ///    - `StorageError` - If an error occurs during upsert
-    async fn upsert_entitlement(&self, params: EntitlementUpsertParams) -> Result<()>;
-}
+impl<T: Storage + ?Sized> Storage for Arc<T> {
+    async fn get_user(&self, user_id: i64) -> Result<Option<User>, StorageError> {
+        (**self).get_user(user_id).await
+    }
 
-/// Combined storage trait for convenience.
-///
-/// This trait is object-safe and can be used with `Box<dyn Storage>` for
-/// dynamic dispatch, or with concrete types for static dispatch.
-pub trait Storage: UserStorage + EntitlementStorage + Send + Sync {}
+    async fn upsert_user(
+        &self,
+        profile: &DiscordProfile,
+        tokens: Option<&StoredTokens>,
+    ) -> Result<(), StorageError> {
+        (**self).upsert_user(profile, tokens).await
+    }
 
-impl<T: UserStorage + EntitlementStorage + Send + Sync> Storage for T {}
+    async fn set_tokens(
+        &self,
+        user_id: i64,
+        tokens: Option<&StoredTokens>,
+    ) -> Result<(), StorageError> {
+        (**self).set_tokens(user_id, tokens).await
+    }
 
-/// Helper function to create a storage error from a string.
-///
-/// Parameters:
-///     - msg: `impl Into<String>` - Error message
-/// Returns:
-///     - `StorageError` - Error
-pub fn storage_error(msg: impl Into<String>) -> StorageError {
-    StorageError::Other(msg.into())
+    async fn set_subscription(
+        &self,
+        user_id: i64,
+        subscription: Option<&Subscription>,
+    ) -> Result<(), StorageError> {
+        (**self).set_subscription(user_id, subscription).await
+    }
+
+    async fn upsert_entitlement(&self, entitlement: &Entitlement) -> Result<(), StorageError> {
+        (**self).upsert_entitlement(entitlement).await
+    }
 }

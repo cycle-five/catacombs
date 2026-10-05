@@ -48,9 +48,20 @@ pub enum StorageError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    /// An error from a host's own storage backend.
+    #[error("storage backend error: {0}")]
+    Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+
     /// Generic storage error for non-sqlx backends.
     #[error("storage error: {0}")]
     Other(String),
+}
+
+impl StorageError {
+    /// Wrap any backend error, keeping its source chain.
+    pub fn backend(err: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Backend(err.into())
+    }
 }
 
 impl IntoResponse for Error {
@@ -93,5 +104,12 @@ mod tests {
         let storage_err = StorageError::Other("test".to_string());
         let err: Error = storage_err.into();
         assert!(matches!(err, Error::Storage(_)));
+    }
+
+    #[test]
+    fn a_backend_error_keeps_its_source() {
+        let err = StorageError::backend(std::io::Error::other("disk"));
+        assert_eq!(err.to_string(), "storage backend error: disk");
+        assert!(std::error::Error::source(&err).is_some());
     }
 }

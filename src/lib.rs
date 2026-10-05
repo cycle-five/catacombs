@@ -47,11 +47,12 @@ mod state;
 pub use config::{Config, ConfigError, DiscordConfig, PremiumConfig, SecurityConfig, WebConfig};
 pub use error::{Error, Result, StorageError};
 pub use models::{
-    DiscordProfile, GuildId, GuildProfile, Subscription, SubscriptionSource, SubscriptionTier, User,
+    DiscordProfile, EncryptedToken, Entitlement, GuildId, GuildProfile, StoredTokens, Subscription,
+    SubscriptionSource, SubscriptionTier, User,
 };
 pub use state::{Auth, HasAuth};
 #[cfg(feature = "memory-storage")]
 pub use storage::MemoryStorage;
 #[cfg(feature = "sqlx-storage")]
 pub use storage::SqlxStorage;
-pub use storage::{EntitlementStorage, Storage, UserStorage};
+pub use storage::Storage;

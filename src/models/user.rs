@@ -3,7 +3,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::subscription::{SubscriptionSource, SubscriptionTier};
+use super::{
+    subscription::{SubscriptionSource, SubscriptionTier},
+    tokens::StoredTokens,
+};
 
 /// A user authenticated via Discord OAuth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,11 +19,9 @@ pub struct User {
     pub global_name: Option<String>,
     /// URL to the user's Discord avatar.
     pub avatar_url: Option<String>,
-    /// Decrypted Discord OAuth refresh token.
-    #[serde(skip_serializing)]
-    pub refresh_token: Option<String>,
-    /// When the Discord OAuth token expires.
-    pub token_expires_at: Option<DateTime<Utc>>,
+    /// The stored Discord tokens. Never serialized.
+    #[serde(skip)]
+    pub tokens: Option<StoredTokens>,
     /// User's subscription tier.
     pub subscription_tier: SubscriptionTier,
     /// Source of the user's subscription.
@@ -55,20 +56,9 @@ impl User {
     }
 }
 
-/// Parameters for creating or updating a user.
-#[derive(Debug, Clone)]
-pub struct UserUpsertParams<'a> {
-    pub user_id: i64,
-    pub username: &'a str,
-    pub global_name: Option<&'a str>,
-    pub avatar_url: Option<&'a str>,
-    pub refresh_token: Option<&'a str>,
-    pub token_expires_at: Option<DateTime<Utc>>,
-}
-
-/// Parameters for upserting an entitlement.
-#[derive(Debug, Clone)]
-pub struct EntitlementUpsertParams {
+/// A Discord entitlement (a purchase or subscription), as storage records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entitlement {
     pub entitlement_id: i64,
     pub user_id: i64,
     pub sku_id: i64,
@@ -84,6 +74,7 @@ mod tests {
     use chrono::Duration;
 
     use super::*;
+    use crate::models::EncryptedToken;
 
     fn make_test_user() -> User {
         User {
@@ -91,8 +82,7 @@ mod tests {
             username: "testuser".to_string(),
             global_name: Some("Test User".to_string()),
             avatar_url: Some("https://cdn.discordapp.com/avatars/123/abc.png".to_string()),
-            refresh_token: None,
-            token_expires_at: None,
+            tokens: None,
             subscription_tier: SubscriptionTier::Free,
             subscription_source: None,
             subscription_expires_at: None,
@@ -145,12 +135,14 @@ mod tests {
     }
 
     #[test]
-    fn test_user_serialization_excludes_refresh_token() {
+    fn test_user_serialization_excludes_tokens() {
         let mut user = make_test_user();
-        user.refresh_token = Some("secret_token".to_string());
-
+        user.tokens = Some(StoredTokens {
+            refresh_token: EncryptedToken::from_stored("secret_token".into()),
+            expires_at: Utc::now(),
+        });
         let json = serde_json::to_string(&user).unwrap();
         assert!(!json.contains("secret_token"));
-        assert!(!json.contains("refresh_token"));
+        assert!(!json.contains("tokens"));
     }
 }
