@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-04
+
+### Fixed
+
+- CI's Clippy job failed on Rust 1.99, whose new `double_must_use` lint fires
+  inside the code that `async-trait` 0.1.89 generates. The lockfile now has
+  `async-trait` 0.1.92, which does not trip it.
+
+### Changed
+
+- MSRV is 1.89, because `uuid` 1.27 requires it.
+- Published to crates.io. The package leaves out CI and local-dev files, and
+  docs.rs builds the docs with every feature enabled.
+
 ## [0.1.0] - 2026-09-30
 
 ### Added
@@ -50,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AES-256-GCM encryption for refresh token storage at rest
 - Axum router with auth endpoints (`/exchange`, `/refresh`, `/revoke`, `/logout`, `/me`)
 
-[Unreleased]: https://github.com/cycle-five/catacombs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/cycle-five/catacombs/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/cycle-five/catacombs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cycle-five/catacombs/releases/tag/v0.1.0
 [0.0.1]: https://github.com/cycle-five/catacombs/releases/tag/v0.0.1

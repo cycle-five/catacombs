@@ -1,8 +1,8 @@
 [package]
 name = "catacombs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "MIT"
 description = "Catacombs is a simple Discord oauth2 library with user management and subscription support, uses Axum, SQLx, Tokio, Rustls by default."
 repository = "https://github.com/cycle-five/catacombs"
@@ -10,6 +10,10 @@ authors = ["Cycle Five <cycle.five@proton.me>"]
 keywords = ["discord", "oauth", "authentication", "axum"]
 categories = ["authentication", "web-programming", "api"]
 readme = "README.md"
+exclude = [".github/", "docker-compose.yml", "rustfmt.toml"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["sqlx-storage", "rustls-tls"]

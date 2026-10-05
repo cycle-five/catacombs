@@ -22,11 +22,9 @@ web dashboard signs in this second way.
 
 ## Using it
 
-Catacombs is not on crates.io yet, so depend on it by git tag:
-
 ```toml
 [dependencies]
-catacombs = { git = "https://github.com/cycle-five/catacombs", tag = "v0.1.0" }
+catacombs = "0.1"
 ```
 
 By default it keeps users in PostgreSQL through SQLx and uses rustls for TLS.
@@ -99,7 +97,7 @@ current user from `/auth/me`. The rustdoc covers each route.
 
 ## Working on it
 
-You need Rust 1.88 or newer, and no database: the integration tests run
+You need Rust 1.89 or newer, and no database: the integration tests run
 against memory storage and a mock Discord. CI builds and tests three feature
 sets, so when you change anything feature-gated, run all three:
 
