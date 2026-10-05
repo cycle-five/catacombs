@@ -325,6 +325,14 @@ pub struct MockEntitlement {
 }
 
 impl MockEntitlement {
+    /// A premium entitlement with `ends_at` given as an offset from now.
+    pub fn premium_ending(id: &str, ends_in: chrono::Duration) -> Self {
+        Self {
+            ends_at: Some((chrono::Utc::now() + ends_in).to_rfc3339()),
+            ..Self::premium_forever(id)
+        }
+    }
+
     /// An active premium entitlement that never ends.
     pub fn premium_forever(id: &str) -> Self {
         Self {

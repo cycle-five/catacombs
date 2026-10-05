@@ -190,3 +190,94 @@ async fn premium_granted_by_hand_survives_a_login_without_entitlements() {
     assert!(user.is_premium());
     assert_eq!(user.subscription_source, Some(SubscriptionSource::Manual));
 }
+
+// Premium edge cases.
+
+async fn login_with(entitlements: Vec<MockEntitlement>) -> Built {
+    let (base, rec) = spawn_mock_discord().await;
+    *rec.entitlements_reply.lock().unwrap() = EntitlementsReply::List(entitlements);
+    let built = build(&base, true);
+    assert_eq!(
+        exchange(&built, r#"{"code":"good-code"}"#).await,
+        StatusCode::OK
+    );
+    built
+}
+
+async fn stored_user(built: &Built) -> catacombs::User {
+    built.storage.get_user(user_id()).await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn the_latest_of_several_time_limited_entitlements_is_the_expiry() {
+    let soon = MockEntitlement::premium_ending("1", chrono::Duration::days(10));
+    let later = MockEntitlement::premium_ending("2", chrono::Duration::days(30));
+    let later_end = chrono::DateTime::parse_from_rfc3339(later.ends_at.as_ref().unwrap()).unwrap();
+    let built = login_with(vec![later.clone(), soon]).await;
+
+    let user = stored_user(&built).await;
+    assert!(user.is_premium());
+    assert_eq!(
+        user.subscription_expires_at.map(|t| t.timestamp()),
+        Some(later_end.timestamp())
+    );
+}
+
+#[tokio::test]
+async fn a_lifetime_entitlement_beats_a_time_limited_one() {
+    let limited = MockEntitlement::premium_ending("1", chrono::Duration::days(10));
+    let built = login_with(vec![limited, MockEntitlement::premium_forever("2")]).await;
+
+    let user = stored_user(&built).await;
+    assert!(user.is_premium());
+    assert_eq!(user.subscription_expires_at, None);
+}
+
+#[tokio::test]
+async fn an_expired_entitlement_grants_nothing() {
+    let built = login_with(vec![MockEntitlement::premium_ending(
+        "1",
+        chrono::Duration::days(-1),
+    )])
+    .await;
+    assert_eq!(
+        stored_user(&built).await.subscription_tier,
+        SubscriptionTier::Free
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_entitlement_grants_nothing() {
+    let deleted = MockEntitlement {
+        deleted: true,
+        ..MockEntitlement::premium_forever("1")
+    };
+    let built = login_with(vec![deleted]).await;
+    assert_eq!(
+        stored_user(&built).await.subscription_tier,
+        SubscriptionTier::Free
+    );
+    assert!(built.storage.entitlement(1).is_none());
+}
+
+#[tokio::test]
+async fn an_entitlement_for_another_sku_grants_nothing() {
+    let other = MockEntitlement {
+        sku_id: "888".into(),
+        ..MockEntitlement::premium_forever("1")
+    };
+    let built = login_with(vec![other]).await;
+    assert_eq!(
+        stored_user(&built).await.subscription_tier,
+        SubscriptionTier::Free
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_entitlement_id_is_skipped() {
+    let bad = MockEntitlement::premium_forever("not-a-snowflake");
+    let built = login_with(vec![bad, MockEntitlement::premium_forever("5")]).await;
+    assert!(stored_user(&built).await.is_premium());
+    assert!(built.storage.entitlement(5).is_some());
+    assert!(built.events.seen()[0].warnings.is_empty());
+}
