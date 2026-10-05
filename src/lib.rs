@@ -46,7 +46,9 @@ mod state;
 // Re-exports for convenience
 pub use config::{Config, ConfigError, DiscordConfig, PremiumConfig, SecurityConfig, WebConfig};
 pub use error::{Error, Result, StorageError};
-pub use models::{SubscriptionSource, SubscriptionTier, User};
+pub use models::{
+    DiscordProfile, GuildId, GuildProfile, Subscription, SubscriptionSource, SubscriptionTier, User,
+};
 pub use state::{Auth, HasAuth};
 #[cfg(feature = "memory-storage")]
 pub use storage::MemoryStorage;

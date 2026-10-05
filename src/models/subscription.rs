@@ -33,6 +33,17 @@ pub enum SubscriptionSource {
     External,
 }
 
+/// A user's subscription, as storage records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Subscription {
+    /// The tier granted.
+    pub tier: SubscriptionTier,
+    /// Where it came from.
+    pub source: SubscriptionSource,
+    /// When it ends. `None` means it does not.
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[cfg(feature = "sqlx-storage")]
 impl sqlx::Type<sqlx::Postgres> for SubscriptionTier {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
