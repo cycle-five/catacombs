@@ -14,9 +14,7 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use catacombs::{
-    AppState, Config, DiscordConfig, MemoryStorage, SecurityConfig, ServerConfig, WebConfig,
-};
+use catacombs::{AppState, Config, DiscordConfig, MemoryStorage, SecurityConfig, WebConfig};
 use serde::Serialize;
 
 pub const CLIENT_ID: &str = "client-id-123";
@@ -122,15 +120,13 @@ pub fn test_config(api_base: &str) -> Config {
             client_id: CLIENT_ID.to_string(),
             client_secret: CLIENT_SECRET.to_string(),
             redirect_uri: REDIRECT_URI.to_string(),
-            bot_token: "bot-token".to_string(),
-            premium_sku_id: None,
+            premium: None,
             api_base: api_base.to_string(),
         },
         security: SecurityConfig {
             jwt_secret: JWT_SECRET.to_string(),
             encryption_key: "unused-by-memory-storage".to_string(),
         },
-        server: ServerConfig::default(),
         web: WebConfig::default(),
     }
 }

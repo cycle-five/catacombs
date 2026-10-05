@@ -170,8 +170,8 @@ pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login
         })?;
 
     // Fetch and process user entitlements for premium status
-    if state.config.discord.premium_sku_id.is_some() {
-        match fetch_user_entitlements(state, user_id).await {
+    if let Some(premium) = &state.config.discord.premium {
+        match fetch_user_entitlements(state, premium, user_id).await {
             Ok(entitlements) => {
                 if let Err(e) = process_user_entitlements(state, user_id, entitlements).await {
                     tracing::warn!("Failed to process entitlements for user {}: {}", user_id, e);
@@ -553,6 +553,7 @@ async fn revoke_discord_token(state: &AppState, token: &str) -> anyhow::Result<(
 
 async fn fetch_user_entitlements(
     state: &AppState,
+    premium: &crate::config::PremiumConfig,
     user_id: i64,
 ) -> anyhow::Result<Vec<DiscordEntitlementResponse>> {
     let user_id_str = user_id.to_string();
@@ -564,10 +565,7 @@ async fn fetch_user_entitlements(
     let response = state
         .http_client
         .get(&url)
-        .header(
-            "Authorization",
-            format!("Bot {}", state.config.discord.bot_token),
-        )
+        .header("Authorization", format!("Bot {}", premium.bot_token))
         .send()
         .await?;
 
@@ -590,7 +588,7 @@ async fn process_user_entitlements(
     user_id: i64,
     entitlements: Vec<DiscordEntitlementResponse>,
 ) -> anyhow::Result<SubscriptionTier> {
-    let premium_sku_id = state.config.discord.premium_sku_id;
+    let premium_sku_id = state.config.discord.premium.as_ref().map(|p| p.sku_id);
 
     let mut highest_tier = SubscriptionTier::Free;
     let mut subscription_expires: Option<DateTime<Utc>> = None;

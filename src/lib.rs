@@ -44,7 +44,7 @@ pub mod storage;
 // Re-exports for convenience
 use std::sync::Arc;
 
-pub use config::{Config, ConfigError, DiscordConfig, SecurityConfig, ServerConfig, WebConfig};
+pub use config::{Config, ConfigError, DiscordConfig, PremiumConfig, SecurityConfig, WebConfig};
 pub use error::{Error, Result, StorageError};
 pub use models::{SubscriptionSource, SubscriptionTier, User};
 #[cfg(feature = "memory-storage")]
