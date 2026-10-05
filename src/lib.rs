@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use catacombs::{Auth, Config, SqlxStorage, routes};
+//! use catacombs::{Auth, Config, SqlxStorage, router, Flows};
 //! use std::sync::Arc;
 //!
 //! #[tokio::main]
@@ -24,7 +24,7 @@
 //!     let state = Arc::new(Auth::new(config, storage));
 //!
 //!     let app = axum::Router::new()
-//!         .nest("/auth", routes::auth_router())
+//!         .nest("/auth", router(Flows::Both))
 //!         .with_state(state);
 //!
 //!     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -54,6 +54,7 @@ pub use models::{
     SubscriptionSource, SubscriptionTier, User,
 };
 pub use observer::{AuthEvent, AuthObserver, Flow, LoginWarning};
+pub use routes::{router, Flows};
 pub use state::{Auth, HasAuth};
 #[cfg(feature = "memory-storage")]
 pub use storage::MemoryStorage;

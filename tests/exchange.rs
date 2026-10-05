@@ -8,12 +8,12 @@ use axum::{
     Router,
 };
 use base64::Engine;
-use catacombs::{auth::validate_token, routes::auth_router, Storage};
+use catacombs::{auth::validate_token, router, Flows, Storage};
 use common::*;
 use tower::ServiceExt;
 
 fn app(api_base: &str) -> Router {
-    auth_router().with_state(test_state(api_base))
+    router(Flows::Activity).with_state(test_state(api_base))
 }
 
 fn exchange(code: &str) -> Request<Body> {
@@ -77,7 +77,7 @@ async fn the_refresh_token_is_stored_only_as_ciphertext() {
     let (base, _rec) = spawn_mock_discord().await;
     let (state, storage) = test_state_with_storage(&base);
 
-    let resp = auth_router()
+    let resp = router(Flows::Activity)
         .with_state(state)
         .oneshot(exchange("good-code"))
         .await
@@ -96,7 +96,7 @@ async fn the_refresh_token_is_stored_only_as_ciphertext() {
 #[tokio::test]
 async fn refresh_decrypts_the_stored_token_and_sends_it_to_discord() {
     let (base, rec) = spawn_mock_discord().await;
-    let app = auth_router().with_state(test_state(&base));
+    let app = router(Flows::Activity).with_state(test_state(&base));
 
     let resp = app.clone().oneshot(exchange("good-code")).await.unwrap();
     let jwt = access_token(resp).await;
@@ -152,7 +152,7 @@ async fn discord_unreachable_is_502() {
 async fn the_stored_profile_has_banner_and_accent_and_no_fake_avatar() {
     let (base, _rec) = spawn_mock_discord().await;
     let (state, storage) = test_state_with_storage(&base);
-    let resp = auth_router()
+    let resp = router(Flows::Activity)
         .with_state(state)
         .oneshot(exchange("good-code"))
         .await

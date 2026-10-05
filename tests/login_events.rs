@@ -4,7 +4,7 @@ mod common;
 
 use axum::http::StatusCode;
 use catacombs::{
-    routes::auth_router, DiscordProfile, Flow, GuildId, LoginWarning, Storage, Subscription,
+    router, DiscordProfile, Flow, Flows, GuildId, LoginWarning, Storage, Subscription,
     SubscriptionSource, SubscriptionTier,
 };
 use common::*;
@@ -15,7 +15,7 @@ fn user_id() -> i64 {
 }
 
 async fn exchange(built: &Built, body: &str) -> StatusCode {
-    auth_router()
+    router(Flows::Activity)
         .with_state(built.state.clone())
         .oneshot(post_json("/exchange", body))
         .await

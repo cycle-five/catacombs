@@ -7,12 +7,7 @@
 //! - User info retrieval
 //! - Logout
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::{get, post},
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use axum_extra::extract::cookie::CookieJar;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -23,27 +18,6 @@ use crate::{
     models::{EncryptedToken, GuildId, StoredTokens},
     Flow, HasAuth, LoginError, SubscriptionTier,
 };
-
-/// Create an Axum router with all auth routes.
-///
-/// Routes:
-/// - `POST /exchange` - Exchange authorization code for tokens
-/// - `POST /refresh` - Refresh the OAuth token
-/// - `POST /revoke` - Revoke tokens with Discord
-/// - `POST /logout` - Delete the session cookie and clear local tokens
-/// - `GET /me` - Get current user info
-/// - `GET /login` - Start the website flow (redirect to Discord)
-/// - `GET /callback` - Finish the website flow (sets the session cookie)
-pub fn auth_router<S: HasAuth + Clone>() -> Router<S> {
-    Router::new()
-        .route("/exchange", post(exchange_code::<S>))
-        .route("/refresh", post(refresh_token::<S>))
-        .route("/revoke", post(revoke_token::<S>))
-        .route("/logout", post(logout::<S>))
-        .route("/me", get(get_current_user::<S>))
-        .route("/login", get(super::web::login::<S>))
-        .route("/callback", get(super::web::callback::<S>))
-}
 
 #[derive(Debug, Deserialize)]
 pub struct CodeExchangeRequest {
@@ -254,8 +228,8 @@ pub async fn logout<S: HasAuth + Clone>(
     (jar, StatusCode::NO_CONTENT)
 }
 
-/// Get current user info from storage.
-pub async fn get_current_user<S: HasAuth + Clone>(
+/// `GET /me`: the signed-in user, as catacombs stores them. Not mounted by [`super::router`](crate::router); a host adds it, or its own.
+pub async fn me<S: HasAuth + Clone>(
     user: AuthenticatedUser,
     State(state): State<S>,
 ) -> Result<Json<UserResponse>, StatusCode> {

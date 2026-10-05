@@ -11,7 +11,7 @@ use axum::{
     routing::get,
     Router,
 };
-use catacombs::{auth::AuthenticatedUser, routes::auth_router, Auth, HasAuth, MemoryStorage};
+use catacombs::{auth::AuthenticatedUser, router, Auth, Flows, HasAuth, MemoryStorage};
 use common::*;
 use tower::ServiceExt;
 
@@ -38,7 +38,7 @@ fn app(api_base: &str) -> Router {
         greeting: "hello",
     });
     Router::new()
-        .nest("/auth", auth_router())
+        .nest("/auth", router(Flows::Activity))
         .route("/whoami", get(whoami))
         .with_state(host)
 }
