@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use catacombs::{AppState, Config, DiscordConfig, MemoryStorage, SecurityConfig, WebConfig};
+use catacombs::{Auth, Config, DiscordConfig, MemoryStorage, SecurityConfig, WebConfig};
 use serde::Serialize;
 
 pub const CLIENT_ID: &str = "client-id-123";
@@ -125,14 +125,33 @@ pub fn test_config(api_base: &str) -> Config {
         },
         security: SecurityConfig {
             jwt_secret: JWT_SECRET.to_string(),
-            encryption_key: "unused-by-memory-storage".to_string(),
+            encryption_key: catacombs::encryption::generate_key(),
         },
         web: WebConfig::default(),
     }
 }
 
-pub fn test_state(api_base: &str) -> Arc<AppState> {
-    Arc::new(AppState::new(test_config(api_base), MemoryStorage::new()))
+pub fn test_state(api_base: &str) -> Arc<Auth> {
+    Arc::new(Auth::new(test_config(api_base), MemoryStorage::new()).unwrap())
+}
+
+pub fn post_json(uri: &str, body: &str) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::post(uri)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_owned()))
+        .unwrap()
+}
+
+#[derive(serde::Deserialize)]
+pub struct TokenBody {
+    pub access_token: String,
+    pub discord_access_token: Option<String>,
+}
+
+pub async fn access_token(resp: Response) -> String {
+    serde_json::from_str::<TokenBody>(&body_string(resp).await)
+        .unwrap()
+        .access_token
 }
 
 pub async fn body_string(resp: Response) -> String {

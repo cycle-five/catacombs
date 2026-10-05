@@ -39,7 +39,7 @@ example `default-features = false, features = ["memory-storage", "rustls-tls"]`.
 Mounting the router is most of the work:
 
 ```rust
-use catacombs::{routes, AppState, Config, SqlxStorage};
+use catacombs::{routes, Auth, Config, SqlxStorage};
 use std::sync::Arc;
 
 let config = Config::from_env()?;
@@ -49,7 +49,7 @@ storage.migrate().await?;
 
 let app = axum::Router::new()
     .nest("/auth", routes::auth_router())
-    .with_state(Arc::new(AppState::new(config, storage)));
+    .with_state(Arc::new(Auth::new(config, storage)?));
 ```
 
 `Config::from_env` reads the settings below, and `.env.example` has the full

@@ -145,6 +145,8 @@ pub enum ConfigError {
     MissingEnv(&'static str),
     #[error("invalid value for environment variable: {0}")]
     InvalidEnv(&'static str),
+    #[error("invalid ENCRYPTION_KEY: {0}")]
+    InvalidEncryptionKey(String),
 }
 
 #[cfg(test)]

@@ -52,11 +52,6 @@ async fn exchange_sends_the_code_with_basic_auth_and_the_configured_redirect() {
     let me = rec.me_requests.lock().unwrap().clone();
     assert_eq!(me, vec![Some(format!("Bearer {MOCK_ACCESS_TOKEN}"))]);
 
-    #[derive(serde::Deserialize)]
-    struct TokenBody {
-        access_token: String,
-        discord_access_token: Option<String>,
-    }
     let body: TokenBody = serde_json::from_str(&body_string(resp).await).unwrap();
     let claims = validate_token(&body.access_token, JWT_SECRET).unwrap();
     assert_eq!(claims.sub, MOCK_USER_ID);

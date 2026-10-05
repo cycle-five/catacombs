@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use discord_oauth_template::{AppState, Config, SqlxStorage, routes};
+//! use catacombs::{Auth, Config, SqlxStorage, routes};
 //! use std::sync::Arc;
 //!
 //! #[tokio::main]
@@ -21,7 +21,7 @@
 //!     let storage = SqlxStorage::new(pool);
 //!     storage.migrate().await?;
 //!
-//!     let state = Arc::new(AppState::new(config, storage));
+//!     let state = Arc::new(Auth::new(config, storage));
 //!
 //!     let app = axum::Router::new()
 //!         .nest("/auth", routes::auth_router())
@@ -41,53 +41,15 @@ pub mod models;
 pub mod routes;
 pub mod storage;
 
-// Re-exports for convenience
-use std::sync::Arc;
+mod state;
 
+// Re-exports for convenience
 pub use config::{Config, ConfigError, DiscordConfig, PremiumConfig, SecurityConfig, WebConfig};
 pub use error::{Error, Result, StorageError};
 pub use models::{SubscriptionSource, SubscriptionTier, User};
+pub use state::{Auth, HasAuth};
 #[cfg(feature = "memory-storage")]
 pub use storage::MemoryStorage;
 #[cfg(feature = "sqlx-storage")]
 pub use storage::SqlxStorage;
 pub use storage::{EntitlementStorage, Storage, UserStorage};
-
-/// Application state containing configuration and storage.
-///
-/// This is designed to be wrapped in `Arc` and used with Axum's state extractor.
-pub struct AppState {
-    /// Application configuration.
-    pub config: Config,
-    /// Storage backend for users and entitlements.
-    pub storage: Box<dyn Storage>,
-    /// HTTP client for Discord API requests.
-    pub http_client: reqwest::Client,
-}
-
-impl AppState {
-    /// Create a new `AppState` with the given configuration and storage.
-    pub fn new(config: Config, storage: impl Storage + 'static) -> Self {
-        Self {
-            config,
-            storage: Box::new(storage),
-            http_client: reqwest::Client::new(),
-        }
-    }
-
-    /// Create a new `AppState` with a custom HTTP client.
-    pub fn with_http_client(
-        config: Config,
-        storage: impl Storage + 'static,
-        http_client: reqwest::Client,
-    ) -> Self {
-        Self {
-            config,
-            storage: Box::new(storage),
-            http_client,
-        }
-    }
-}
-
-/// Type alias for Arc-wrapped `AppState`, commonly used with Axum.
-pub type SharedState = Arc<AppState>;

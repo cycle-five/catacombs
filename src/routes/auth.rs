@@ -7,8 +7,6 @@
 //! - User info retrieval
 //! - Logout
 
-use std::sync::Arc;
-
 use axum::{
     extract::State,
     http::StatusCode,
@@ -22,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     auth::{self, AuthenticatedUser},
     models::{EntitlementUpsertParams, SubscriptionSource, SubscriptionTier, UserUpsertParams},
-    AppState,
+    Auth, HasAuth,
 };
 
 /// Create an Axum router with all auth routes.
@@ -35,15 +33,15 @@ use crate::{
 /// - `GET /me` - Get current user info
 /// - `GET /login` - Start the website flow (redirect to Discord)
 /// - `GET /callback` - Finish the website flow (sets the session cookie)
-pub fn auth_router() -> Router<Arc<AppState>> {
+pub fn auth_router<S: HasAuth + Clone>() -> Router<S> {
     Router::new()
-        .route("/exchange", post(exchange_code))
-        .route("/refresh", post(refresh_token))
-        .route("/revoke", post(revoke_token))
-        .route("/logout", post(logout))
-        .route("/me", get(get_current_user))
-        .route("/login", get(super::web::login))
-        .route("/callback", get(super::web::callback))
+        .route("/exchange", post(exchange_code::<S>))
+        .route("/refresh", post(refresh_token::<S>))
+        .route("/revoke", post(revoke_token::<S>))
+        .route("/logout", post(logout::<S>))
+        .route("/me", get(get_current_user::<S>))
+        .route("/login", get(super::web::login::<S>))
+        .route("/callback", get(super::web::callback::<S>))
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,18 +116,18 @@ pub(crate) struct Login {
 /// Exchange `code` with Discord, upsert the user, refresh entitlements, and
 /// mint our JWT. Shared by the SDK flow (`POST /exchange`) and the website
 /// flow (`GET /callback`), so the two cannot drift.
-pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login, StatusCode> {
+pub(crate) async fn complete_login(auth: &Auth, code: &str) -> Result<Login, StatusCode> {
     // Exchange authorization code for Discord access token
-    let discord_token = exchange_code_with_discord(state, code).await.map_err(|e| {
+    let discord_token = exchange_code_with_discord(auth, code).await.map_err(|e| {
         tracing::error!("Failed to exchange code with Discord: {}", e);
         StatusCode::UNAUTHORIZED
     })?;
 
     // Get user info from Discord API
     let discord_user = get_discord_user_info(
-        &state.config.discord.api_base,
+        &auth.config().discord.api_base,
         &discord_token.access_token,
-        &state.http_client,
+        auth.http_client(),
     )
     .await
     .map_err(|e| {
@@ -150,8 +148,7 @@ pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login
     let token_expires_at = Utc::now() + chrono::Duration::seconds(discord_token.expires_in);
 
     // Create or update user in storage
-    state
-        .storage
+    auth.storage()
         .upsert_user(
             UserUpsertParams {
                 user_id,
@@ -161,7 +158,7 @@ pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login
                 refresh_token: Some(&discord_token.refresh_token),
                 token_expires_at: Some(token_expires_at),
             },
-            &state.config.security.encryption_key,
+            &auth.config().security.encryption_key,
         )
         .await
         .map_err(|e| {
@@ -170,10 +167,10 @@ pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login
         })?;
 
     // Fetch and process user entitlements for premium status
-    if let Some(premium) = &state.config.discord.premium {
-        match fetch_user_entitlements(state, premium, user_id).await {
+    if let Some(premium) = &auth.config().discord.premium {
+        match fetch_user_entitlements(auth, premium, user_id).await {
             Ok(entitlements) => {
-                if let Err(e) = process_user_entitlements(state, user_id, entitlements).await {
+                if let Err(e) = process_user_entitlements(auth, user_id, entitlements).await {
                     tracing::warn!("Failed to process entitlements for user {}: {}", user_id, e);
                 }
             }
@@ -193,7 +190,7 @@ pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login
     let jwt_token = auth::generate_token(
         user_id,
         &discord_user.username,
-        &state.config.security.jwt_secret,
+        &auth.config().security.jwt_secret,
     )
     .map_err(|e| {
         tracing::error!("Failed to generate JWT token: {}", e);
@@ -207,12 +204,13 @@ pub(crate) async fn complete_login(state: &AppState, code: &str) -> Result<Login
 }
 
 /// Exchange Discord authorization code for access token and create user session.
-pub async fn exchange_code(
-    State(state): State<Arc<AppState>>,
+pub async fn exchange_code<S: HasAuth + Clone>(
+    State(state): State<S>,
     Json(payload): Json<CodeExchangeRequest>,
 ) -> Result<Json<TokenResponse>, StatusCode> {
+    let auth = state.auth();
     tracing::info!("Exchanging authorization code for access token");
-    let login = complete_login(&state, &payload.code).await?;
+    let login = complete_login(auth, &payload.code).await?;
     Ok(Json(TokenResponse {
         access_token: login.jwt,
         discord_access_token: Some(login.discord_access_token),
@@ -220,10 +218,11 @@ pub async fn exchange_code(
 }
 
 /// Refresh the user's OAuth tokens and return a new JWT.
-pub async fn refresh_token(
+pub async fn refresh_token<S: HasAuth + Clone>(
     user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(state): State<S>,
 ) -> Result<Json<TokenResponse>, StatusCode> {
+    let auth = state.auth();
     tracing::info!(
         "Refreshing token for user: {} ({})",
         user.username,
@@ -231,9 +230,9 @@ pub async fn refresh_token(
     );
 
     // Get user with refresh token from storage
-    let db_user = state
-        .storage
-        .get_user(user.user_id, &state.config.security.encryption_key)
+    let db_user = auth
+        .storage()
+        .get_user(user.user_id, &auth.config().security.encryption_key)
         .await
         .map_err(|e| {
             tracing::error!("Storage error fetching user for refresh: {}", e);
@@ -250,7 +249,7 @@ pub async fn refresh_token(
     })?;
 
     // Refresh with Discord
-    let discord_token = refresh_discord_token(&state, &current_refresh_token)
+    let discord_token = refresh_discord_token(auth, &current_refresh_token)
         .await
         .map_err(|e| {
             tracing::error!("Failed to refresh Discord token: {}", e);
@@ -260,13 +259,12 @@ pub async fn refresh_token(
     let token_expires_at = Utc::now() + chrono::Duration::seconds(discord_token.expires_in);
 
     // Store new refresh token
-    state
-        .storage
+    auth.storage()
         .update_refresh_token(
             user.user_id,
             &discord_token.refresh_token,
             token_expires_at,
-            &state.config.security.encryption_key,
+            &auth.config().security.encryption_key,
         )
         .await
         .map_err(|e| {
@@ -284,7 +282,7 @@ pub async fn refresh_token(
     let jwt_token = auth::generate_token(
         user.user_id,
         &user.username,
-        &state.config.security.jwt_secret,
+        &auth.config().security.jwt_secret,
     )
     .map_err(|e| {
         tracing::error!("Failed to generate JWT token: {}", e);
@@ -298,10 +296,11 @@ pub async fn refresh_token(
 }
 
 /// Revoke the user's Discord OAuth tokens and clear from storage.
-pub async fn revoke_token(
+pub async fn revoke_token<S: HasAuth + Clone>(
     user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(state): State<S>,
 ) -> Result<StatusCode, StatusCode> {
+    let auth = state.auth();
     tracing::info!(
         "Revoking tokens for user: {} ({})",
         user.username,
@@ -309,9 +308,9 @@ pub async fn revoke_token(
     );
 
     // Get user with refresh token
-    let db_user = state
-        .storage
-        .get_user(user.user_id, &state.config.security.encryption_key)
+    let db_user = auth
+        .storage()
+        .get_user(user.user_id, &auth.config().security.encryption_key)
         .await
         .map_err(|e| {
             tracing::error!("Storage error fetching user for revoke: {}", e);
@@ -321,7 +320,7 @@ pub async fn revoke_token(
     // Revoke with Discord if we have a refresh token
     if let Some(user_data) = db_user {
         if let Some(refresh_token) = user_data.refresh_token {
-            if let Err(e) = revoke_discord_token(&state, &refresh_token).await {
+            if let Err(e) = revoke_discord_token(auth, &refresh_token).await {
                 tracing::warn!(
                     "Failed to revoke token with Discord (continuing anyway): {}",
                     e
@@ -331,8 +330,7 @@ pub async fn revoke_token(
     }
 
     // Clear tokens from storage
-    state
-        .storage
+    auth.storage()
         .clear_user_tokens(user.user_id)
         .await
         .map_err(|e| {
@@ -353,38 +351,40 @@ pub async fn revoke_token(
 ///
 /// A missing or expired session is not an error here -- the cookie still has
 /// to go, or the browser keeps sending a dead token.
-pub async fn logout(
+pub async fn logout<S: HasAuth + Clone>(
     user: Result<AuthenticatedUser, StatusCode>,
-    State(state): State<Arc<AppState>>,
+    State(state): State<S>,
     jar: CookieJar,
 ) -> (CookieJar, StatusCode) {
+    let auth = state.auth();
     if let Ok(user) = user {
         tracing::info!("Logging out user: {} ({})", user.username, user.user_id);
-        if let Err(e) = state.storage.clear_user_tokens(user.user_id).await {
+        if let Err(e) = auth.storage().clear_user_tokens(user.user_id).await {
             tracing::error!("Failed to clear tokens for logout: {}", e);
         }
     }
     let jar = jar.remove(super::web::removal(
-        &state.config.web,
-        state.config.web.cookie_name.clone(),
+        &auth.config().web,
+        auth.config().web.cookie_name.clone(),
     ));
     (jar, StatusCode::NO_CONTENT)
 }
 
 /// Get current user info from storage.
-pub async fn get_current_user(
+pub async fn get_current_user<S: HasAuth + Clone>(
     user: AuthenticatedUser,
-    State(state): State<Arc<AppState>>,
+    State(state): State<S>,
 ) -> Result<Json<UserResponse>, StatusCode> {
+    let auth = state.auth();
     tracing::debug!(
         "Getting user info for authenticated user: {} ({})",
         user.username,
         user.user_id
     );
 
-    let db_user = state
-        .storage
-        .get_user(user.user_id, &state.config.security.encryption_key)
+    let db_user = auth
+        .storage()
+        .get_user(user.user_id, &auth.config().security.encryption_key)
         .await
         .map_err(|e| {
             tracing::error!("Storage error fetching user: {}", e);
@@ -433,22 +433,22 @@ fn build_avatar_url(user: &DiscordUser) -> String {
 }
 
 async fn exchange_code_with_discord(
-    state: &AppState,
+    auth: &Auth,
     code: &str,
 ) -> anyhow::Result<DiscordTokenResponse> {
     let params = [
         ("grant_type", "authorization_code"),
         ("code", code),
-        ("redirect_uri", state.config.discord.redirect_uri.as_str()),
+        ("redirect_uri", auth.config().discord.redirect_uri.as_str()),
     ];
 
-    let response = state
-        .http_client
-        .post(format!("{}/oauth2/token", state.config.discord.api_base))
+    let response = auth
+        .http_client()
+        .post(format!("{}/oauth2/token", auth.config().discord.api_base))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
-            &state.config.discord.client_id,
-            Some(&state.config.discord.client_secret),
+            &auth.config().discord.client_id,
+            Some(&auth.config().discord.client_secret),
         )
         .form(&params)
         .send()
@@ -490,7 +490,7 @@ async fn get_discord_user_info(
 }
 
 async fn refresh_discord_token(
-    state: &AppState,
+    auth: &Auth,
     refresh_token: &str,
 ) -> anyhow::Result<DiscordTokenResponse> {
     let params = [
@@ -498,13 +498,13 @@ async fn refresh_discord_token(
         ("refresh_token", refresh_token),
     ];
 
-    let response = state
-        .http_client
-        .post(format!("{}/oauth2/token", state.config.discord.api_base))
+    let response = auth
+        .http_client()
+        .post(format!("{}/oauth2/token", auth.config().discord.api_base))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
-            &state.config.discord.client_id,
-            Some(&state.config.discord.client_secret),
+            &auth.config().discord.client_id,
+            Some(&auth.config().discord.client_secret),
         )
         .form(&params)
         .send()
@@ -520,19 +520,19 @@ async fn refresh_discord_token(
     Ok(response.json::<DiscordTokenResponse>().await?)
 }
 
-async fn revoke_discord_token(state: &AppState, token: &str) -> anyhow::Result<()> {
+async fn revoke_discord_token(auth: &Auth, token: &str) -> anyhow::Result<()> {
     let params = [("token", token)];
 
-    let response = state
-        .http_client
+    let response = auth
+        .http_client()
         .post(format!(
             "{}/oauth2/token/revoke",
-            state.config.discord.api_base
+            auth.config().discord.api_base
         ))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .basic_auth(
-            &state.config.discord.client_id,
-            Some(&state.config.discord.client_secret),
+            &auth.config().discord.client_id,
+            Some(&auth.config().discord.client_secret),
         )
         .form(&params)
         .send()
@@ -552,18 +552,20 @@ async fn revoke_discord_token(state: &AppState, token: &str) -> anyhow::Result<(
 }
 
 async fn fetch_user_entitlements(
-    state: &AppState,
+    auth: &Auth,
     premium: &crate::config::PremiumConfig,
     user_id: i64,
 ) -> anyhow::Result<Vec<DiscordEntitlementResponse>> {
     let user_id_str = user_id.to_string();
     let url = format!(
         "{}/applications/{}/entitlements?user_id={}&exclude_ended=false",
-        state.config.discord.api_base, state.config.discord.client_id, user_id_str
+        auth.config().discord.api_base,
+        auth.config().discord.client_id,
+        user_id_str
     );
 
-    let response = state
-        .http_client
+    let response = auth
+        .http_client()
         .get(&url)
         .header("Authorization", format!("Bot {}", premium.bot_token))
         .send()
@@ -584,11 +586,11 @@ async fn fetch_user_entitlements(
 }
 
 async fn process_user_entitlements(
-    state: &AppState,
+    auth: &Auth,
     user_id: i64,
     entitlements: Vec<DiscordEntitlementResponse>,
 ) -> anyhow::Result<SubscriptionTier> {
-    let premium_sku_id = state.config.discord.premium.as_ref().map(|p| p.sku_id);
+    let premium_sku_id = auth.config().discord.premium.as_ref().map(|p| p.sku_id);
 
     let mut highest_tier = SubscriptionTier::Free;
     let mut subscription_expires: Option<DateTime<Utc>> = None;
@@ -618,8 +620,8 @@ async fn process_user_entitlements(
         };
 
         // Store entitlement
-        if let Err(e) = state
-            .storage
+        if let Err(e) = auth
+            .storage()
             .upsert_entitlement(EntitlementUpsertParams {
                 entitlement_id: ent_id,
                 user_id,
@@ -660,8 +662,7 @@ async fn process_user_entitlements(
 
     // Update user's subscription tier
     if highest_tier != SubscriptionTier::Free {
-        state
-            .storage
+        auth.storage()
             .update_subscription(
                 user_id,
                 highest_tier,

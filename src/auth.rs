@@ -5,16 +5,15 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
 
 use axum::{
-    extract::{FromRef, FromRequestParts},
+    extract::FromRequestParts,
     http::{header, request::Parts, StatusCode},
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
+use crate::state::{Auth, HasAuth};
 
 /// JWT claims structure.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -64,49 +63,36 @@ pub struct AuthenticatedUser {
     pub username: String,
 }
 
-/// Extractor for authenticated users from JWT tokens.
+/// Read and check the session token in `parts`.
+fn authenticate(parts: &Parts, auth: &Auth) -> Result<AuthenticatedUser, StatusCode> {
+    let config = auth.config();
+    let token = token_from_parts(parts, &config.web.cookie_name).ok_or(StatusCode::UNAUTHORIZED)?;
+    let claims = validate_token(&token, &config.security.jwt_secret)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let user_id = claims
+        .sub
+        .parse::<i64>()
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok(AuthenticatedUser {
+        user_id,
+        username: claims.username,
+    })
+}
+
+/// Extractor for authenticated users.
 ///
 /// The token is looked for, in order, in:
 /// 1. the session cookie (`config.web.cookie_name`)
 /// 2. `Authorization: Bearer <token>`
 /// 3. `?token=<token>` (useful for WebSocket connections)
-impl<S> FromRequestParts<S> for AuthenticatedUser
-where
-    S: Send + Sync,
-    Arc<AppState>: FromRef<S>,
-{
+impl<S: HasAuth> FromRequestParts<S> for AuthenticatedUser {
     type Rejection = StatusCode;
 
     fn from_request_parts(
         parts: &mut Parts,
         state: &S,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        let app_state = Arc::<AppState>::from_ref(state);
-
-        let token = token_from_parts(parts, &app_state.config.web.cookie_name);
-
-        async move {
-            let token = token.ok_or(StatusCode::UNAUTHORIZED)?;
-
-            // Validate the JWT token
-            let token_data = decode::<Claims>(
-                &token,
-                &DecodingKey::from_secret(app_state.config.security.jwt_secret.as_ref()),
-                &Validation::default(),
-            )
-            .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-            let user_id = token_data
-                .claims
-                .sub
-                .parse::<i64>()
-                .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-            Ok(AuthenticatedUser {
-                user_id,
-                username: token_data.claims.username,
-            })
-        }
+        std::future::ready(authenticate(parts, state.auth()))
     }
 }
 

@@ -1,8 +1,6 @@
 //! The website flow: a browser redirect to Discord and back, ending in a
 //! session cookie. The SDK flow (`POST /exchange`) is untouched.
 
-use std::sync::Arc;
-
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -13,7 +11,7 @@ use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{auth::SESSION_TTL_SECS, config::WebConfig, routes::auth::complete_login, AppState};
+use crate::{auth::SESSION_TTL_SECS, config::WebConfig, routes::auth::complete_login, HasAuth};
 
 /// Discord's authorize page (not the REST API base).
 pub const AUTHORIZE_URL: &str = "https://discord.com/oauth2/authorize";
@@ -112,23 +110,24 @@ pub(crate) fn removal(web: &WebConfig, name: String) -> Cookie<'static> {
 }
 
 /// `GET /login?return_to=/path` — start a login.
-pub async fn login(
-    State(state): State<Arc<AppState>>,
+pub async fn login<S: HasAuth + Clone>(
+    State(state): State<S>,
     jar: CookieJar,
     Query(q): Query<LoginQuery>,
 ) -> (CookieJar, Redirect) {
+    let auth = state.auth();
     let csrf = random_state();
     let return_to = safe_return_to(q.return_to.as_deref());
-    let scope = state.config.web.scopes.join(" ");
+    let scope = auth.config().web.scopes.join(" ");
     let params = serde_urlencoded::to_string(AuthorizeParams {
         response_type: "code",
-        client_id: &state.config.discord.client_id,
+        client_id: &auth.config().discord.client_id,
         scope: &scope,
         state: &csrf,
-        redirect_uri: &state.config.discord.redirect_uri,
+        redirect_uri: &auth.config().discord.redirect_uri,
     })
     .expect("authorize params are plain strings");
-    let web = &state.config.web;
+    let web = &auth.config().web;
     let jar = jar
         .add(short_cookie(web, STATE_COOKIE, csrf))
         .add(short_cookie(web, RETURN_COOKIE, return_to));
@@ -136,17 +135,18 @@ pub async fn login(
 }
 
 /// `GET /callback?code&state` — finish a login.
-pub async fn callback(
-    State(state): State<Arc<AppState>>,
+pub async fn callback<S: HasAuth + Clone>(
+    State(state): State<S>,
     jar: CookieJar,
     Query(q): Query<CallbackQuery>,
 ) -> Result<(CookieJar, Redirect), StatusCode> {
+    let auth = state.auth();
     let expected = jar.get(STATE_COOKIE).map(|c| c.value().to_owned());
     // Validated again here: the cookie could have been planted.
     let return_to = safe_return_to(jar.get(RETURN_COOKIE).map(Cookie::value));
     let jar = jar
-        .remove(removal(&state.config.web, STATE_COOKIE.to_owned()))
-        .remove(removal(&state.config.web, RETURN_COOKIE.to_owned()));
+        .remove(removal(&auth.config().web, STATE_COOKIE.to_owned()))
+        .remove(removal(&auth.config().web, RETURN_COOKIE.to_owned()));
 
     if let Some(error) = q.error {
         // The user cancelled on Discord. Back where they were, logged out.
@@ -163,8 +163,8 @@ pub async fn callback(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let login = complete_login(&state, &code).await?;
-    let jar = jar.add(session_cookie(&state.config.web, login.jwt));
+    let login = complete_login(auth, &code).await?;
+    let jar = jar.add(session_cookie(&auth.config().web, login.jwt));
     Ok((jar, Redirect::to(&return_to)))
 }
 
