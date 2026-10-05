@@ -10,7 +10,7 @@ authors = ["Cycle Five <cycle.five@proton.me>"]
 keywords = ["discord", "oauth", "authentication", "axum"]
 categories = ["authentication", "web-programming", "api"]
 readme = "README.md"
-exclude = [".github/", "docker-compose.yml", "rustfmt.toml"]
+exclude = [".github/", "docker-compose.yml", "rustfmt.toml", "docs/"]
 
 [package.metadata.docs.rs]
 all-features = true
