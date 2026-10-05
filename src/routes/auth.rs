@@ -7,7 +7,8 @@
 //! - Logout
 //!
 //! [`router`](super::router) mounts these. [`me`] (the current user) is a
-//! handler the host mounts itself, where and if it wants it.
+//! handler the host mounts itself, where and if it wants it, as
+//! `get(catacombs::routes::me::<Arc<AppState>>)`.
 
 use axum::{extract::State, http::StatusCode, Json};
 use axum_extra::extract::cookie::CookieJar;
@@ -230,7 +231,11 @@ pub async fn logout<S: HasAuth + Clone>(
     (jar, StatusCode::NO_CONTENT)
 }
 
-/// `GET /me`: the signed-in user, as catacombs stores them. Not mounted by [`super::router`](crate::router); a host adds it, or its own.
+/// `GET /me`: the signed-in user, as catacombs stores them. Not mounted by
+/// [`super::router`](crate::router); a host adds it, or its own.
+///
+/// Name the host's state type when mounting it, or inference fails:
+/// `.route("/me", get(catacombs::routes::me::<Arc<AppState>>))`.
 pub async fn me<S: HasAuth + Clone>(
     user: AuthenticatedUser,
     State(state): State<S>,

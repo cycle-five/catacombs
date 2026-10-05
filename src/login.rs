@@ -127,7 +127,15 @@ async fn reconcile_premium(
     let mut latest_end = None;
 
     for e in entitlements.iter().filter(|e| !e.deleted) {
-        let (Some(entitlement_id), Some(sku_id)) = (snowflake(&e.id), snowflake(&e.sku_id)) else {
+        // An entitlement we cannot read might be the premium one. Guessing
+        // "not premium" could clear a paying user, so give up instead.
+        let Some(sku_id) = snowflake(&e.sku_id) else {
+            anyhow::bail!("an entitlement has a malformed sku id: {e:?}");
+        };
+        let Some(entitlement_id) = snowflake(&e.id) else {
+            if sku_id == premium.sku_id {
+                anyhow::bail!("a premium entitlement has a malformed id: {e:?}");
+            }
             tracing::warn!("skipping an entitlement with a malformed id: {e:?}");
             continue;
         };
@@ -160,20 +168,33 @@ async fn reconcile_premium(
         }
     }
 
+    let stored = storage.get_user(user_id).await?;
     if active {
-        let subscription = Subscription {
-            tier: SubscriptionTier::Premium,
-            source: SubscriptionSource::Discord,
-            expires_at: if lifetime { None } else { latest_end },
-        };
-        storage
-            .set_subscription(user_id, Some(&subscription))
-            .await?;
+        let expires_at = if lifetime { None } else { latest_end };
+        // A manual or external grant that lasts at least as long stays as it
+        // is, so it is not lost when the Discord entitlement later ends.
+        let outlasts_discord = stored.as_ref().is_some_and(|u| {
+            u.is_premium()
+                && u.subscription_source != Some(SubscriptionSource::Discord)
+                && match (u.subscription_expires_at, expires_at) {
+                    (None, _) => true,
+                    (Some(stored_end), Some(discord_end)) => stored_end >= discord_end,
+                    (Some(_), None) => false,
+                }
+        });
+        if !outlasts_discord {
+            let subscription = Subscription {
+                tier: SubscriptionTier::Premium,
+                source: SubscriptionSource::Discord,
+                expires_at,
+            };
+            storage
+                .set_subscription(user_id, Some(&subscription))
+                .await?;
+        }
     } else {
-        let from_discord = storage
-            .get_user(user_id)
-            .await?
-            .is_some_and(|u| u.subscription_source == Some(SubscriptionSource::Discord));
+        let from_discord =
+            stored.is_some_and(|u| u.subscription_source == Some(SubscriptionSource::Discord));
         if from_discord {
             storage.set_subscription(user_id, None).await?;
         }

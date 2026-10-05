@@ -7,7 +7,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use generic_array::GenericArray;
 
 /// Encrypts data using AES-256-GCM
-pub fn encrypt(data: &str, key: &str) -> Result<String> {
+pub(crate) fn encrypt(data: &str, key: &str) -> Result<String> {
     // Decode the base64-encoded key
     let key_bytes = BASE64
         .decode(key)
@@ -39,7 +39,7 @@ pub fn encrypt(data: &str, key: &str) -> Result<String> {
 }
 
 /// Decrypts data using AES-256-GCM
-pub fn decrypt(encrypted_data: &str, key: &str) -> Result<String> {
+pub(crate) fn decrypt(encrypted_data: &str, key: &str) -> Result<String> {
     // Decode the base64-encoded key
     let key_bytes = BASE64
         .decode(key)

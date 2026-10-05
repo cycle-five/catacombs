@@ -33,9 +33,10 @@ suits tests and small services that can afford to forget everyone on a
 restart. Memory storage holds refresh tokens encrypted, like any storage; a
 per-process key from `catacombs::encryption::generate_key()` is enough, since
 nothing outlives the process. The database storage needs PostgreSQL 14 or
-newer. The `native-tls` feature uses the system's OpenSSL in place of rustls. To use either one, turn
-off the default features and name both a storage and a TLS feature, for
-example `default-features = false, features = ["memory-storage", "rustls-tls"]`.
+newer. The `native-tls` feature uses the system's OpenSSL in place of rustls.
+To use either one, turn off the default features and name both a storage and a
+TLS feature, for example
+`default-features = false, features = ["memory-storage", "rustls-tls"]`.
 
 Mounting the router is most of the work:
 
@@ -54,9 +55,17 @@ storage.migrate().await?;
 let auth = Auth::new(Config::from_env()?, storage)?;
 
 let app = axum::Router::new()
+    // Flows::Activity serves /auth/exchange, /refresh and /revoke (SDK and
+    // Activity logins). Flows::Web serves /auth/login and /auth/callback
+    // (website logins). Flows::Both serves all of them.
     .nest("/auth", router(Flows::Activity))
     .with_state(Arc::new(AppState { auth }));
 ```
+
+`storage.migrate()` tolerates migrations that are not its own. A host that
+runs its own sqlx migrator on the same database must call
+`set_ignore_missing(true)` on that migrator too, or it will refuse to start
+because of catacombs' migration.
 
 `Auth::new` checks the encryption key and returns an error if it is not 32
 base64 bytes. `Flows` picks which routes are mounted: `Activity` for
@@ -71,11 +80,11 @@ is set. The bot token is only required with a SKU.
 ```bash
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
-DISCORD_BOT_TOKEN=...
 DISCORD_REDIRECT_URI=https://example.com/auth/callback
 JWT_SECRET=...
 ENCRYPTION_KEY=...             # openssl rand -base64 32
 DISCORD_PREMIUM_SKU_ID=...     # optional
+DISCORD_BOT_TOKEN=...          # required only with DISCORD_PREMIUM_SKU_ID
 ```
 
 In a handler, ask for an `AuthenticatedUser`, and requests without a valid
@@ -93,19 +102,23 @@ The extractor looks for the session cookie first, then an
 `Authorization: Bearer` header, and finally a `?token=` query parameter. That
 last one is for WebSocket clients, which can't set headers.
 
-For the website flow, register `<your origin>/auth/callback` as a redirect in
-the Discord developer portal, and set `DISCORD_REDIRECT_URI` to the same URL.
-Then link people to `/auth/login?return_to=/where/next`. Only same-site paths
-are accepted for `return_to`. `POST /auth/logout` signs someone out. Scopes,
-the cookie's name and its `Secure` flag live in `WebConfig`.
+For the website flow, mount `Flows::Web` or `Flows::Both` (the snippet above
+mounts `Flows::Activity`, which has no `/auth/login`). Register
+`<your origin>/auth/callback` as a redirect in the Discord developer portal,
+and set `DISCORD_REDIRECT_URI` to the same URL. Then link people to
+`/auth/login?return_to=/where/next`. Only same-site paths are accepted for
+`return_to`. `POST /auth/logout` signs someone out. Scopes, the cookie's name
+and its `Secure` flag live in `WebConfig`.
 
 The session cookie is `SameSite=Lax`. That keeps other sites out, but not your
 own subdomains. Host the site on a domain whose subdomains you control, and
 have your own state-changing endpoints check `Origin` or require a JSON body.
 
 The rest of the router refreshes and revokes Discord tokens. It does not mount
-`/me`; `catacombs::routes::me` is there if you want to route it yourself. The
-rustdoc covers each route.
+`/me`; `catacombs::routes::me` is there if you want to route it yourself, with
+your state type named:
+`.route("/me", get(catacombs::routes::me::<Arc<AppState>>))`. The rustdoc
+covers each route.
 
 ## Your own users table
 
@@ -134,7 +147,7 @@ accumulate in storage across logins.
 - `AppState` became `Auth`, built with `Auth::new(config, storage)?` (it checks
   the encryption key); implement `HasAuth` instead of `FromRef`.
 - `auth_router()` became `router(Flows::...)`, and `/me` is no longer mounted
-  (`routes::me` is still available).
+  (`routes::me` is still available, as `me::<Arc<AppState>>`).
 - `UserStorage` and `EntitlementStorage` became `Storage`.
 - `ServerConfig` was removed, and `bot_token` and `premium_sku_id` became
   `premium: Option<PremiumConfig>`.

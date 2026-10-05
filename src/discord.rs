@@ -14,11 +14,21 @@ use crate::{
 const CDN: &str = "https://cdn.discordapp.com";
 
 /// Tokens from `/oauth2/token`.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub(crate) struct TokenGrant {
     pub access_token: String,
     pub expires_in: i64,
     pub refresh_token: String,
+}
+
+impl std::fmt::Debug for TokenGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenGrant")
+            .field("access_token", &"[redacted]")
+            .field("expires_in", &self.expires_in)
+            .field("refresh_token", &"[redacted]")
+            .finish()
+    }
 }
 
 /// One entitlement from the application's entitlements list.

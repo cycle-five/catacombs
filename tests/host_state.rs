@@ -78,3 +78,59 @@ async fn the_extractor_refuses_a_request_without_a_token() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// CrackTunes' shape: a plain `Clone` state, with no `Arc` around the host.
+#[derive(Clone)]
+struct WebHost {
+    auth: Arc<Auth>,
+}
+
+impl HasAuth for WebHost {
+    fn auth(&self) -> &Auth {
+        &self.auth
+    }
+}
+
+async fn web_whoami(user: AuthenticatedUser) -> String {
+    user.user_id.to_string()
+}
+
+#[tokio::test]
+async fn a_host_with_plain_clone_state_mounts_the_web_router_and_uses_the_extractor() {
+    let host = WebHost {
+        auth: Arc::new(Auth::new(test_config("http://127.0.0.1:1"), MemoryStorage::new()).unwrap()),
+    };
+    let jwt =
+        catacombs::auth::generate_token(7, "someone", &host.auth.config().security.jwt_secret)
+            .unwrap();
+    let app = Router::new()
+        .nest("/auth", router(Flows::Web))
+        .route("/whoami", get(web_whoami))
+        .with_state(host);
+
+    let resp = app
+        .clone()
+        .oneshot(Request::get("/auth/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+    let resp = app
+        .clone()
+        .oneshot(Request::get("/whoami").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .oneshot(
+            Request::get("/whoami")
+                .header(header::AUTHORIZATION, format!("Bearer {jwt}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_string(resp).await, "7");
+}

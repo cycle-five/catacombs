@@ -102,7 +102,8 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for SubscriptionSource {
             "discord" => Ok(Self::Discord),
             "manual" => Ok(Self::Manual),
             "external" => Ok(Self::External),
-            _ => Ok(Self::Discord),
+            // Unknown is Manual, not Discord: only Discord premium is ever cleared.
+            _ => Ok(Self::Manual),
         }
     }
 }

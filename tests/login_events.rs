@@ -120,6 +120,15 @@ async fn an_active_premium_entitlement_makes_the_user_premium() {
 
 /// Put a user in storage before they log in, with `source`'s premium.
 async fn seed_premium(built: &Built, source: SubscriptionSource) {
+    seed_premium_until(built, source, None).await;
+}
+
+/// As `seed_premium`, ending at `expires_at` (`None` is lifetime).
+async fn seed_premium_until(
+    built: &Built,
+    source: SubscriptionSource,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+) {
     built
         .storage
         .upsert_user(&DiscordProfile::new(user_id(), "mockuser"), None)
@@ -128,7 +137,7 @@ async fn seed_premium(built: &Built, source: SubscriptionSource) {
     let premium = Subscription {
         tier: SubscriptionTier::Premium,
         source,
-        expires_at: None,
+        expires_at,
     };
     built
         .storage
@@ -273,11 +282,121 @@ async fn an_entitlement_for_another_sku_grants_nothing() {
     );
 }
 
+/// Seed `source` premium ending `expires_at`, then log in with `entitlements`.
+async fn login_seeded(
+    source: SubscriptionSource,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    entitlements: Vec<MockEntitlement>,
+) -> Built {
+    let (base, rec) = spawn_mock_discord().await;
+    *rec.entitlements_reply.lock().unwrap() = EntitlementsReply::List(entitlements);
+    let built = build(&base, true);
+    seed_premium_until(&built, source, expires_at).await;
+    assert_eq!(
+        exchange(&built, r#"{"code":"good-code"}"#).await,
+        StatusCode::OK
+    );
+    built
+}
+
 #[tokio::test]
-async fn a_malformed_entitlement_id_is_skipped() {
-    let bad = MockEntitlement::premium_forever("not-a-snowflake");
+async fn a_lifetime_manual_grant_is_not_overwritten_by_a_shorter_discord_one() {
+    let limited = MockEntitlement::premium_ending("1", chrono::Duration::days(10));
+    let built = login_seeded(SubscriptionSource::Manual, None, vec![limited]).await;
+    let user = stored_user(&built).await;
+    assert!(user.is_premium());
+    assert_eq!(user.subscription_source, Some(SubscriptionSource::Manual));
+    assert_eq!(user.subscription_expires_at, None);
+
+    // The Discord grant is not stored, so it ending later takes nothing away.
+    let (base, _rec) = spawn_mock_discord().await;
+    let built2 = build(&base, true);
+    seed_premium(&built2, SubscriptionSource::Manual).await;
+    assert_eq!(
+        exchange(&built2, r#"{"code":"good-code"}"#).await,
+        StatusCode::OK
+    );
+    let user = stored_user(&built2).await;
+    assert!(user.is_premium());
+    assert_eq!(user.subscription_source, Some(SubscriptionSource::Manual));
+}
+
+#[tokio::test]
+async fn a_lifetime_discord_grant_replaces_a_manual_one_that_ends_sooner() {
+    let soon = chrono::Utc::now() + chrono::Duration::days(5);
+    let built = login_seeded(
+        SubscriptionSource::Manual,
+        Some(soon),
+        vec![MockEntitlement::premium_forever("1")],
+    )
+    .await;
+    let user = stored_user(&built).await;
+    assert!(user.is_premium());
+    assert_eq!(user.subscription_source, Some(SubscriptionSource::Discord));
+    assert_eq!(user.subscription_expires_at, None);
+}
+
+#[tokio::test]
+async fn a_longer_manual_grant_is_kept_over_a_shorter_discord_one() {
+    let manual_end = chrono::Utc::now() + chrono::Duration::days(30);
+    let built = login_seeded(
+        SubscriptionSource::External,
+        Some(manual_end),
+        vec![MockEntitlement::premium_ending(
+            "1",
+            chrono::Duration::days(5),
+        )],
+    )
+    .await;
+    let user = stored_user(&built).await;
+    assert_eq!(user.subscription_source, Some(SubscriptionSource::External));
+    assert_eq!(
+        user.subscription_expires_at.map(|t| t.timestamp()),
+        Some(manual_end.timestamp())
+    );
+}
+
+#[tokio::test]
+async fn premium_from_an_external_source_survives_a_login_without_entitlements() {
+    let built = login_seeded(SubscriptionSource::External, None, vec![]).await;
+    let user = stored_user(&built).await;
+    assert!(user.is_premium());
+    assert_eq!(user.subscription_source, Some(SubscriptionSource::External));
+}
+
+#[tokio::test]
+async fn a_malformed_entitlement_for_another_sku_is_skipped() {
+    let bad = MockEntitlement {
+        sku_id: "888".into(),
+        ..MockEntitlement::premium_forever("not-a-snowflake")
+    };
     let built = login_with(vec![bad, MockEntitlement::premium_forever("5")]).await;
     assert!(stored_user(&built).await.is_premium());
     assert!(built.storage.entitlement(5).is_some());
     assert!(built.events.seen()[0].warnings.is_empty());
+}
+
+#[tokio::test]
+async fn a_malformed_premium_entitlement_leaves_storage_unchanged() {
+    for bad in [
+        MockEntitlement::premium_forever("not-a-snowflake"),
+        MockEntitlement {
+            sku_id: "not-a-sku".into(),
+            ..MockEntitlement::premium_forever("1")
+        },
+    ] {
+        let built = login_seeded(
+            SubscriptionSource::Discord,
+            None,
+            vec![bad, MockEntitlement::premium_forever("5")],
+        )
+        .await;
+        let user = stored_user(&built).await;
+        assert!(user.is_premium());
+        assert_eq!(user.subscription_source, Some(SubscriptionSource::Discord));
+        assert_eq!(
+            built.events.seen()[0].warnings,
+            vec![LoginWarning::EntitlementsUnavailable]
+        );
+    }
 }

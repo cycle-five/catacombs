@@ -27,18 +27,28 @@ impl Auth {
     /// [`ConfigError::InvalidEncryptionKey`] when
     /// `config.security.encryption_key` is not a base64-encoded 32-byte key.
     /// It is checked here so a bad key fails at startup, not on every login.
+    ///
+    /// Discord requests use a default HTTP client with a 15 second timeout, so
+    /// a hung Discord cannot hold a login open. Use
+    /// [`with_http_client`](Self::with_http_client) to change that.
     pub fn new(config: Config, storage: impl Storage + 'static) -> Result<Self, ConfigError> {
         encryption::validate_key(&config.security.encryption_key)
             .map_err(|e| ConfigError::InvalidEncryptionKey(e.to_string()))?;
         Ok(Self {
             config,
             storage: Box::new(storage),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_default(),
             observer: Box::new(NoObserver),
         })
     }
 
     /// Use `client` for Discord requests (timeouts, proxies, a shared pool).
+    ///
+    /// This replaces the default client, and with it the default 15 second
+    /// timeout: set your own timeout on `client`.
     #[must_use]
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http_client = client;

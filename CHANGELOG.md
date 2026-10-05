@@ -38,8 +38,18 @@ storage and metrics. See "Upgrading from 0.1" in the README.
 - A user without a custom avatar has `avatar_url: None`, not Discord's
   default-avatar URL.
 - Premium is reconciled from entitlements on every login. Premium from
-  Discord ends when its entitlement does; manual and external premium is
-  never removed; an entitlements outage changes nothing.
+  Discord ends when its entitlement does. Manual and external premium is
+  never removed, and a Discord grant does not replace one that is still active
+  and lasts at least as long. A Discord grant that outlasts it does replace it.
+  An entitlements outage, or an entitlement that cannot be read (a malformed
+  SKU id, or a malformed id on the premium SKU), changes nothing and raises
+  `LoginWarning::EntitlementsUnavailable`.
+- Discord requests use a default HTTP client with a 15 second timeout (it
+  had none). `Auth::with_http_client` replaces it.
+- `Debug` for `Config`'s parts no longer prints secrets, and
+  `encryption::encrypt` and `decrypt` are crate-private.
+- An unrecognised stored subscription source reads as `Manual`, not `Discord`.
+- `StorageError` is `#[non_exhaustive]`.
 - `SqlxStorage` uses `catacombs_users`, `catacombs_entitlements` and
   `catacombs_guild_profiles`, from a timestamp-versioned migration, and
   `migrate()` tolerates a host's own migrations. It needs PostgreSQL 14+.
@@ -51,6 +61,7 @@ storage and metrics. See "Upgrading from 0.1" in the README.
   and `premium_sku_id` moved into `premium: Option<PremiumConfig>`, and the
   bot token is only required with a SKU.
 - `SharedState`, `auth_router`, `UserUpsertParams`, `storage_error`.
+- `error::Error` and `error::Result` (nothing used them).
 
 ## [0.1.1] - 2026-10-04
 

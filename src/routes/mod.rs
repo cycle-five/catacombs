@@ -31,8 +31,10 @@ pub enum Flows {
 /// catacombs' routes for `flows`, to nest under a prefix such as `/auth`.
 ///
 /// `/me` is not included, because what a user looks like belongs to the
-/// host. Mount [`me`] for catacombs' basic shape, or write your own handler
-/// with [`AuthenticatedUser`](crate::auth::AuthenticatedUser).
+/// host. Mount [`me`] for catacombs' basic shape, naming the host's state
+/// type (`.route("/me", get(catacombs::routes::me::<Arc<AppState>>))`), or
+/// write your own handler with
+/// [`AuthenticatedUser`](crate::auth::AuthenticatedUser).
 pub fn router<S: HasAuth + Clone>(flows: Flows) -> Router<S> {
     let mut router = Router::new().route("/logout", post(logout::<S>));
     if matches!(flows, Flows::Activity | Flows::Both) {

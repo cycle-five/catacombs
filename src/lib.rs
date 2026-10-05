@@ -28,6 +28,8 @@
 //! let auth = Auth::new(Config::from_env()?, storage)?;
 //!
 //! let app = axum::Router::new()
+//!     // Activity: /exchange, /refresh, /revoke. Web: /login, /callback.
+//!     // Both: all of them. /logout is always mounted.
 //!     .nest("/auth", router(Flows::Activity))
 //!     .with_state(Arc::new(AppState { auth }));
 //! ```
@@ -47,7 +49,7 @@ mod state;
 
 // Re-exports for convenience
 pub use config::{Config, ConfigError, DiscordConfig, PremiumConfig, SecurityConfig, WebConfig};
-pub use error::{Error, LoginError, Rejection, Result, StorageError};
+pub use error::{LoginError, Rejection, StorageError};
 pub use models::{
     DiscordProfile, EncryptedToken, Entitlement, GuildId, GuildProfile, StoredTokens, Subscription,
     SubscriptionSource, SubscriptionTier, User,

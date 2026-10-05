@@ -93,3 +93,38 @@ async fn me_is_mounted_only_by_the_host() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn refresh_and_revoke_are_mounted_under_activity_and_both() {
+    for flows in [Flows::Activity, Flows::Both] {
+        for uri in ["/refresh", "/revoke"] {
+            assert_eq!(
+                status(app(flows), Method::POST, uri).await,
+                StatusCode::UNAUTHORIZED,
+                "{flows:?} {uri}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn callback_is_mounted_under_web_and_both() {
+    for flows in [Flows::Web, Flows::Both] {
+        assert_eq!(
+            status(app(flows), Method::GET, "/callback").await,
+            StatusCode::BAD_REQUEST,
+            "{flows:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn logout_is_mounted_under_activity_and_web() {
+    for flows in [Flows::Activity, Flows::Web] {
+        assert_eq!(
+            status(app(flows), Method::POST, "/logout").await,
+            StatusCode::NO_CONTENT,
+            "{flows:?}"
+        );
+    }
+}

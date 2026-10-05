@@ -15,7 +15,7 @@ pub struct Config {
 }
 
 /// Discord `OAuth2` and API configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct DiscordConfig {
     /// Discord application client ID.
     pub client_id: String,
@@ -34,7 +34,7 @@ pub struct DiscordConfig {
 
 /// Which SKU makes a user premium, and the bot token that may read the
 /// application's entitlements.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct PremiumConfig {
     /// The SKU whose active entitlement grants premium.
     pub sku_id: i64,
@@ -43,12 +43,43 @@ pub struct PremiumConfig {
 }
 
 /// Security configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct SecurityConfig {
     /// Secret key for JWT token signing.
     pub jwt_secret: String,
     /// Base64-encoded 32-byte key for AES-256-GCM encryption of refresh tokens.
     pub encryption_key: String,
+}
+
+// Hand-written so that logging a `Config` never prints a secret.
+impl std::fmt::Debug for DiscordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[redacted]")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("premium", &self.premium)
+            .field("api_base", &self.api_base)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for PremiumConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PremiumConfig")
+            .field("sku_id", &self.sku_id)
+            .field("bot_token", &"[redacted]")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SecurityConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityConfig")
+            .field("jwt_secret", &"[redacted]")
+            .field("encryption_key", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Settings for the browser redirect flow and its session cookie.
@@ -205,6 +236,23 @@ mod tests {
             err,
             ConfigError::InvalidEnv("DISCORD_PREMIUM_SKU_ID")
         ));
+    }
+
+    #[test]
+    fn debug_output_holds_no_secret() {
+        let vars = [
+            ("DISCORD_CLIENT_ID", "id"),
+            ("DISCORD_CLIENT_SECRET", "s3cret-client"),
+            ("DISCORD_REDIRECT_URI", "https://example.test/auth/callback"),
+            ("DISCORD_PREMIUM_SKU_ID", "42"),
+            ("DISCORD_BOT_TOKEN", "s3cret-bot"),
+            ("JWT_SECRET", "s3cret-jwt"),
+            ("ENCRYPTION_KEY", "s3cret-key"),
+        ];
+        let config = Config::from_lookup(lookup(&vars)).unwrap();
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("s3cret"), "a secret leaked: {shown}");
+        assert!(shown.contains("[redacted]"));
     }
 
     #[test]
