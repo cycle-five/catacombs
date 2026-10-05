@@ -19,11 +19,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::{self, AuthenticatedUser},
+    config::PremiumConfig,
+    discord::{snowflake, Discord, DiscordEntitlement},
     models::{
-        DiscordProfile, EncryptedToken, Entitlement, StoredTokens, Subscription,
-        SubscriptionSource, SubscriptionTier,
+        EncryptedToken, Entitlement, StoredTokens, Subscription, SubscriptionSource,
+        SubscriptionTier,
     },
-    Auth, HasAuth,
+    Auth, HasAuth, LoginError, StorageError,
 };
 
 /// Create an Axum router with all auth routes.
@@ -71,45 +73,6 @@ pub struct UserResponse {
     pub is_premium: bool,
 }
 
-/// Discord user response from /users/@me endpoint.
-#[derive(Debug, Deserialize)]
-struct DiscordUser {
-    id: String,
-    username: String,
-    avatar: Option<String>,
-    global_name: Option<String>,
-    discriminator: Option<String>,
-}
-
-/// Discord `OAuth2` token response.
-#[derive(Debug, Deserialize)]
-struct DiscordTokenResponse {
-    access_token: String,
-    #[allow(dead_code)]
-    token_type: String,
-    expires_in: i64,
-    refresh_token: String,
-    #[allow(dead_code)]
-    scope: String,
-}
-
-/// Discord entitlement from the API.
-#[derive(Debug, Deserialize)]
-struct DiscordEntitlementResponse {
-    id: String,
-    sku_id: String,
-    #[allow(dead_code)]
-    user_id: Option<String>,
-    #[serde(rename = "type")]
-    entitlement_type: i32,
-    #[serde(default)]
-    deleted: bool,
-    starts_at: Option<DateTime<Utc>>,
-    ends_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    consumed: bool,
-}
-
 /// A completed Discord login: our JWT and Discord's own access token.
 pub(crate) struct Login {
     pub jwt: String,
@@ -119,91 +82,49 @@ pub(crate) struct Login {
 /// Exchange `code` with Discord, upsert the user, refresh entitlements, and
 /// mint our JWT. Shared by the SDK flow (`POST /exchange`) and the website
 /// flow (`GET /callback`), so the two cannot drift.
-pub(crate) async fn complete_login(auth: &Auth, code: &str) -> Result<Login, StatusCode> {
-    // Exchange authorization code for Discord access token
-    let discord_token = exchange_code_with_discord(auth, code).await.map_err(|e| {
-        tracing::error!("Failed to exchange code with Discord: {}", e);
-        StatusCode::UNAUTHORIZED
-    })?;
-
-    // Get user info from Discord API
-    let discord_user = get_discord_user_info(
-        &auth.config().discord.api_base,
-        &discord_token.access_token,
-        auth.http_client(),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to get Discord user info: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // Parse Discord user ID (u64 snowflake stored as i64)
-    let user_id = discord_user.id.parse::<u64>().map_err(|e| {
-        tracing::error!("Failed to parse Discord user ID: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })? as i64;
-
-    // Calculate token expiration
-    let token_expires_at = Utc::now() + chrono::Duration::seconds(discord_token.expires_in);
-
-    // Create or update user in storage
-    let mut profile = DiscordProfile::new(user_id, discord_user.username.clone());
-    profile.global_name = discord_user.global_name.clone();
-    profile.avatar_url = Some(build_avatar_url(&discord_user));
+pub(crate) async fn complete_login(auth: &Auth, code: &str) -> Result<Login, LoginError> {
+    let discord = Discord::new(auth.http_client(), &auth.config().discord);
+    let grant = discord.exchange_code(code).await?;
+    let profile = discord.profile(&grant.access_token).await?;
+    let config = auth.config();
     let tokens = StoredTokens {
         refresh_token: EncryptedToken::encrypt(
-            &discord_token.refresh_token,
-            &auth.config().security.encryption_key,
+            &grant.refresh_token,
+            &config.security.encryption_key,
         )
         .map_err(|e| {
-            tracing::error!("Failed to encrypt refresh token: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            LoginError::Storage(StorageError::Other(format!(
+                "encrypting the refresh token: {e}"
+            )))
         })?,
-        expires_at: token_expires_at,
+        expires_at: Utc::now() + chrono::Duration::seconds(grant.expires_in),
     };
-    auth.storage()
-        .upsert_user(&profile, Some(&tokens))
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to create/update user in storage: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    // Fetch and process user entitlements for premium status
-    if let Some(premium) = &auth.config().discord.premium {
-        match fetch_user_entitlements(auth, premium, user_id).await {
+    auth.storage().upsert_user(&profile, Some(&tokens)).await?;
+    if let Some(premium) = &config.discord.premium {
+        match discord.entitlements(premium, profile.id).await {
             Ok(entitlements) => {
-                if let Err(e) = process_user_entitlements(auth, user_id, entitlements).await {
-                    tracing::warn!("Failed to process entitlements for user {}: {}", user_id, e);
+                if let Err(e) =
+                    process_user_entitlements(auth, premium, profile.id, entitlements).await
+                {
+                    tracing::warn!(
+                        "Failed to process entitlements for user {}: {}",
+                        profile.id,
+                        e
+                    );
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to fetch entitlements for user {}: {}", user_id, e);
-            }
+            Err(e) => tracing::warn!(
+                "Failed to fetch entitlements for user {}: {}",
+                profile.id,
+                e
+            ),
         }
     }
-
-    tracing::info!(
-        "Successfully authenticated user: {} (ID: {})",
-        discord_user.username,
-        user_id
-    );
-
-    // Generate JWT token
-    let jwt_token = auth::generate_token(
-        user_id,
-        &discord_user.username,
-        &auth.config().security.jwt_secret,
-    )
-    .map_err(|e| {
-        tracing::error!("Failed to generate JWT token: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
+    let jwt = auth::generate_token(profile.id, &profile.username, &config.security.jwt_secret)
+        .map_err(|_| LoginError::Session)?;
     Ok(Login {
-        jwt: jwt_token,
-        discord_access_token: discord_token.access_token,
+        jwt,
+        discord_access_token: grant.access_token,
     })
 }
 
@@ -211,7 +132,7 @@ pub(crate) async fn complete_login(auth: &Auth, code: &str) -> Result<Login, Sta
 pub async fn exchange_code<S: HasAuth + Clone>(
     State(state): State<S>,
     Json(payload): Json<CodeExchangeRequest>,
-) -> Result<Json<TokenResponse>, StatusCode> {
+) -> Result<Json<TokenResponse>, LoginError> {
     let auth = state.auth();
     tracing::info!("Exchanging authorization code for access token");
     let login = complete_login(auth, &payload.code).await?;
@@ -257,7 +178,8 @@ pub async fn refresh_token<S: HasAuth + Clone>(
     })?;
 
     // Refresh with Discord
-    let discord_token = refresh_discord_token(auth, &current_refresh_token)
+    let discord_token = Discord::new(auth.http_client(), &auth.config().discord)
+        .refresh(&current_refresh_token)
         .await
         .map_err(|e| {
             tracing::error!("Failed to refresh Discord token: {}", e);
@@ -328,7 +250,10 @@ pub async fn revoke_token<S: HasAuth + Clone>(
             .decrypt(&auth.config().security.encryption_key)
         {
             Ok(refresh_token) => {
-                if let Err(e) = revoke_discord_token(auth, &refresh_token).await {
+                if let Err(e) = Discord::new(auth.http_client(), &auth.config().discord)
+                    .revoke(&refresh_token)
+                    .await
+                {
                     tracing::warn!(
                         "Failed to revoke token with Discord (continuing anyway): {}",
                         e
@@ -416,191 +341,13 @@ pub async fn get_current_user<S: HasAuth + Clone>(
     }))
 }
 
-// ============================================================================
-// Discord API helpers
-// ============================================================================
-
-/// Build a CDN URL for a Discord user's avatar (or the default embed avatar).
-fn build_avatar_url(user: &DiscordUser) -> String {
-    if let Some(avatar_hash) = user.avatar.as_ref() {
-        let ext = if avatar_hash.starts_with("a_") {
-            "gif"
-        } else {
-            "png"
-        };
-        format!(
-            "https://cdn.discordapp.com/avatars/{}/{}.{}?size=1024",
-            user.id, avatar_hash, ext
-        )
-    } else {
-        let index = user
-            .discriminator
-            .as_deref()
-            .and_then(|d| d.parse::<u32>().ok())
-            .map_or(0, |n| n % 5);
-        format!("https://cdn.discordapp.com/embed/avatars/{index}.png")
-    }
-}
-
-async fn exchange_code_with_discord(
-    auth: &Auth,
-    code: &str,
-) -> anyhow::Result<DiscordTokenResponse> {
-    let params = [
-        ("grant_type", "authorization_code"),
-        ("code", code),
-        ("redirect_uri", auth.config().discord.redirect_uri.as_str()),
-    ];
-
-    let response = auth
-        .http_client()
-        .post(format!("{}/oauth2/token", auth.config().discord.api_base))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .basic_auth(
-            &auth.config().discord.client_id,
-            Some(&auth.config().discord.client_secret),
-        )
-        .form(&params)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await?;
-        tracing::error!("Discord token exchange failed: {} - {}", status, error_text);
-        anyhow::bail!("Discord token exchange failed with status {status}");
-    }
-
-    Ok(response.json::<DiscordTokenResponse>().await?)
-}
-
-async fn get_discord_user_info(
-    api_base: &str,
-    access_token: &str,
-    http_client: &reqwest::Client,
-) -> anyhow::Result<DiscordUser> {
-    let response = http_client
-        .get(format!("{api_base}/users/@me"))
-        .header("Authorization", format!("Bearer {access_token}"))
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await?;
-        tracing::error!(
-            "Discord user info fetch failed: {} - {}",
-            status,
-            error_text
-        );
-        anyhow::bail!("Failed to fetch Discord user info with status {status}");
-    }
-
-    Ok(response.json::<DiscordUser>().await?)
-}
-
-async fn refresh_discord_token(
-    auth: &Auth,
-    refresh_token: &str,
-) -> anyhow::Result<DiscordTokenResponse> {
-    let params = [
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token),
-    ];
-
-    let response = auth
-        .http_client()
-        .post(format!("{}/oauth2/token", auth.config().discord.api_base))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .basic_auth(
-            &auth.config().discord.client_id,
-            Some(&auth.config().discord.client_secret),
-        )
-        .form(&params)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await?;
-        tracing::error!("Discord token refresh failed: {} - {}", status, error_text);
-        anyhow::bail!("Discord token refresh failed with status {status}");
-    }
-
-    Ok(response.json::<DiscordTokenResponse>().await?)
-}
-
-async fn revoke_discord_token(auth: &Auth, token: &str) -> anyhow::Result<()> {
-    let params = [("token", token)];
-
-    let response = auth
-        .http_client()
-        .post(format!(
-            "{}/oauth2/token/revoke",
-            auth.config().discord.api_base
-        ))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .basic_auth(
-            &auth.config().discord.client_id,
-            Some(&auth.config().discord.client_secret),
-        )
-        .form(&params)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await?;
-        tracing::warn!(
-            "Discord token revocation returned non-success: {} - {}",
-            status,
-            error_text
-        );
-    }
-
-    Ok(())
-}
-
-async fn fetch_user_entitlements(
-    auth: &Auth,
-    premium: &crate::config::PremiumConfig,
-    user_id: i64,
-) -> anyhow::Result<Vec<DiscordEntitlementResponse>> {
-    let user_id_str = user_id.to_string();
-    let url = format!(
-        "{}/applications/{}/entitlements?user_id={}&exclude_ended=false",
-        auth.config().discord.api_base,
-        auth.config().discord.client_id,
-        user_id_str
-    );
-
-    let response = auth
-        .http_client()
-        .get(&url)
-        .header("Authorization", format!("Bot {}", premium.bot_token))
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await?;
-        tracing::warn!(
-            "Discord entitlements fetch failed: {} - {}",
-            status,
-            error_text
-        );
-        return Ok(vec![]);
-    }
-
-    Ok(response.json::<Vec<DiscordEntitlementResponse>>().await?)
-}
-
 async fn process_user_entitlements(
     auth: &Auth,
+    premium: &PremiumConfig,
     user_id: i64,
-    entitlements: Vec<DiscordEntitlementResponse>,
+    entitlements: Vec<DiscordEntitlement>,
 ) -> anyhow::Result<SubscriptionTier> {
-    let premium_sku_id = auth.config().discord.premium.as_ref().map(|p| p.sku_id);
+    let premium_sku_id = Some(premium.sku_id);
 
     let mut highest_tier = SubscriptionTier::Free;
     let mut subscription_expires: Option<DateTime<Utc>> = None;
@@ -610,14 +357,14 @@ async fn process_user_entitlements(
             continue;
         }
 
-        let ent_id: i64 = match entitlement.id.parse() {
+        let ent_id: i64 = match snowflake(&entitlement.id).ok_or("not a snowflake") {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!("Failed to parse entitlement.id '{}': {}", entitlement.id, e);
                 continue;
             }
         };
-        let sku_id: i64 = match entitlement.sku_id.parse() {
+        let sku_id: i64 = match snowflake(&entitlement.sku_id).ok_or("not a snowflake") {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -695,38 +442,7 @@ async fn process_user_entitlements(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_avatar_url, CodeExchangeRequest, DiscordUser, SubscriptionTier, TokenResponse,
-        UserResponse,
-    };
-
-    /// Helper function to create a `DiscordUser` for testing.
-    /// This reduces redundancy in test cases.
-    /// Parameters:
-    ///     - id: &str - Discord user ID
-    ///     - username: &str - Discord username
-    ///     - avatar: Option<&str> - Discord avatar hash
-    /// Returns:
-    ///     - `DiscordUser` - Constructed `DiscordUser` instance
-    fn make_discord_user(id: &str, username: &str, avatar: Option<&str>) -> DiscordUser {
-        DiscordUser {
-            id: id.to_string(),
-            username: username.to_string(),
-            avatar: avatar.map(std::string::ToString::to_string),
-            global_name: None,
-            discriminator: None,
-        }
-    }
-
-    /// Helper function to create a default `DiscordUser` for testing.
-    /// Returns:
-    ///     - `DiscordUser` - Constructed `DiscordUser` instance with default values
-    fn make_default_discord_user() -> DiscordUser {
-        let id = "987654321";
-        let username = "default_user";
-        let avatar = None;
-        make_discord_user(id, username, avatar)
-    }
+    use super::{CodeExchangeRequest, SubscriptionTier, TokenResponse, UserResponse};
 
     #[test]
     fn test_code_exchange_request_deserialization() {
@@ -774,24 +490,5 @@ mod tests {
         assert!(json.contains("123456789"));
         assert!(json.contains("test_user"));
         assert!(json.contains("premium"));
-    }
-
-    #[test]
-    fn test_avatar_url_generation() {
-        let user_id = "123456789";
-        let avatar_hash = "abc123def456";
-        let avatar_url = format!("https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png");
-        assert_eq!(
-            avatar_url,
-            "https://cdn.discordapp.com/avatars/123456789/abc123def456.png"
-        );
-    }
-
-    #[test]
-    fn test_avatar_url_generation_with_discriminator() {
-        let user = make_default_discord_user();
-        let avatar_url = build_avatar_url(&user);
-
-        assert_eq!(avatar_url, "https://cdn.discordapp.com/embed/avatars/0.png");
     }
 }

@@ -26,6 +26,10 @@ pub const MOCK_ACCESS_TOKEN: &str = "discord-access-token";
 pub const MOCK_REFRESH_TOKEN: &str = "discord-refresh-token";
 /// A code the mock rejects the way Discord does: 400 invalid_grant.
 pub const BAD_CODE: &str = "bad-code";
+pub const INVALID_CLIENT_CODE: &str = "invalid-client-code";
+pub const DISCORD_DOWN_CODE: &str = "discord-down-code";
+pub const MOCK_GUILD_ID: &str = "555";
+pub const MOCK_NICK: &str = "Mocky";
 
 #[derive(Debug, Clone)]
 pub struct TokenRequest {
@@ -38,6 +42,26 @@ pub struct Recorded {
     pub token_requests: Arc<Mutex<Vec<TokenRequest>>>,
     /// The Authorization header of each `/users/@me` request.
     pub me_requests: Arc<Mutex<Vec<Option<String>>>>,
+    /// The guild id of each guild member request.
+    pub member_requests: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Serialize)]
+struct OAuthErrorBody<'a> {
+    error: &'a str,
+}
+
+#[derive(Serialize)]
+struct MockMember<'a> {
+    nick: Option<&'a str>,
+    avatar: Option<&'a str>,
+    banner: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct DiscordErrorBody<'a> {
+    message: &'a str,
+    code: u32,
 }
 
 #[derive(Serialize)]
@@ -56,6 +80,8 @@ struct MockUser<'a> {
     avatar: Option<&'a str>,
     global_name: Option<&'a str>,
     discriminator: Option<&'a str>,
+    banner: Option<&'a str>,
+    accent_color: Option<i32>,
 }
 
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -70,22 +96,36 @@ async fn token(
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
-    let rejected = form.get("code").map(String::as_str) == Some(BAD_CODE);
+    let code = form.get("code").cloned();
     rec.token_requests.lock().unwrap().push(TokenRequest {
         authorization: header(&headers, "authorization"),
         form,
     });
-    if rejected {
-        return (StatusCode::BAD_REQUEST, "invalid_grant").into_response();
+    match code.as_deref() {
+        Some(BAD_CODE) => (
+            StatusCode::BAD_REQUEST,
+            Json(OAuthErrorBody {
+                error: "invalid_grant",
+            }),
+        )
+            .into_response(),
+        Some(INVALID_CLIENT_CODE) => (
+            StatusCode::UNAUTHORIZED,
+            Json(OAuthErrorBody {
+                error: "invalid_client",
+            }),
+        )
+            .into_response(),
+        Some(DISCORD_DOWN_CODE) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        _ => Json(MockToken {
+            access_token: MOCK_ACCESS_TOKEN,
+            token_type: "Bearer",
+            expires_in: 604_800,
+            refresh_token: MOCK_REFRESH_TOKEN,
+            scope: "identify",
+        })
+        .into_response(),
     }
-    Json(MockToken {
-        access_token: MOCK_ACCESS_TOKEN,
-        token_type: "Bearer",
-        expires_in: 604_800,
-        refresh_token: MOCK_REFRESH_TOKEN,
-        scope: "identify",
-    })
-    .into_response()
 }
 
 async fn me(State(rec): State<Recorded>, headers: HeaderMap) -> Json<MockUser<'static>> {
@@ -99,7 +139,33 @@ async fn me(State(rec): State<Recorded>, headers: HeaderMap) -> Json<MockUser<'s
         avatar: None,
         global_name: Some("Mock User"),
         discriminator: None,
+        banner: Some("a_banner"),
+        accent_color: Some(0x11_22_33),
     })
+}
+
+async fn member(
+    State(rec): State<Recorded>,
+    axum::extract::Path(guild_id): axum::extract::Path<String>,
+) -> Response {
+    rec.member_requests.lock().unwrap().push(guild_id.clone());
+    if guild_id == MOCK_GUILD_ID {
+        Json(MockMember {
+            nick: Some(MOCK_NICK),
+            avatar: Some("guildav"),
+            banner: None,
+        })
+        .into_response()
+    } else {
+        (
+            StatusCode::FORBIDDEN,
+            Json(DiscordErrorBody {
+                message: "Missing Access",
+                code: 50001,
+            }),
+        )
+            .into_response()
+    }
 }
 
 /// Start the mock on an ephemeral port; returns its base URL.
@@ -108,6 +174,7 @@ pub async fn spawn_mock_discord() -> (String, Recorded) {
     let app = Router::new()
         .route("/oauth2/token", post(token))
         .route("/users/@me", get(me))
+        .route("/users/@me/guilds/{guild_id}/member", get(member))
         .with_state(rec.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

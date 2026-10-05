@@ -35,6 +35,7 @@
 
 pub mod auth;
 pub mod config;
+mod discord;
 pub mod encryption;
 pub mod error;
 pub mod models;
@@ -45,7 +46,7 @@ mod state;
 
 // Re-exports for convenience
 pub use config::{Config, ConfigError, DiscordConfig, PremiumConfig, SecurityConfig, WebConfig};
-pub use error::{Error, Result, StorageError};
+pub use error::{Error, LoginError, Rejection, Result, StorageError};
 pub use models::{
     DiscordProfile, EncryptedToken, Entitlement, GuildId, GuildProfile, StoredTokens, Subscription,
     SubscriptionSource, SubscriptionTier, User,

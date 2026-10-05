@@ -3,7 +3,6 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::Redirect,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -11,7 +10,9 @@ use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{auth::SESSION_TTL_SECS, config::WebConfig, routes::auth::complete_login, HasAuth};
+use crate::{
+    auth::SESSION_TTL_SECS, config::WebConfig, routes::auth::complete_login, HasAuth, LoginError,
+};
 
 /// Discord's authorize page (not the REST API base).
 pub const AUTHORIZE_URL: &str = "https://discord.com/oauth2/authorize";
@@ -139,7 +140,7 @@ pub async fn callback<S: HasAuth + Clone>(
     State(state): State<S>,
     jar: CookieJar,
     Query(q): Query<CallbackQuery>,
-) -> Result<(CookieJar, Redirect), StatusCode> {
+) -> Result<(CookieJar, Redirect), LoginError> {
     let auth = state.auth();
     let expected = jar.get(STATE_COOKIE).map(|c| c.value().to_owned());
     // Validated again here: the cookie could have been planted.
@@ -156,11 +157,11 @@ pub async fn callback<S: HasAuth + Clone>(
 
     let (Some(code), Some(got), Some(expected)) = (q.code, q.state, expected) else {
         tracing::warn!("callback without code, state or state cookie");
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(LoginError::BadState);
     };
     if !constant_time_eq(got.as_bytes(), expected.as_bytes()) {
         tracing::warn!("callback state mismatch");
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(LoginError::BadState);
     }
 
     let login = complete_login(auth, &code).await?;
