@@ -260,3 +260,18 @@ async fn logout_without_a_valid_session_still_clears_the_cookie() {
         .expect("cleared")
         .contains("Max-Age=0"));
 }
+
+#[tokio::test]
+async fn a_web_login_is_reported_as_the_web_flow() {
+    let (base, _rec) = spawn_mock_discord().await;
+    let built = build(&base, false);
+    let app = auth_router().with_state(built.state.clone());
+    let resp = get(
+        app,
+        "/callback?code=good-code&state=abc",
+        Some(&format!("{STATE_COOKIE}=abc")),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(built.events.seen()[0].flow, catacombs::Flow::Web);
+}

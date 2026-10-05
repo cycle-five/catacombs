@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::{
     config::{Config, ConfigError},
     encryption,
+    observer::{AuthObserver, NoObserver},
     storage::Storage,
 };
 
@@ -16,6 +17,7 @@ pub struct Auth {
     config: Config,
     storage: Box<dyn Storage>,
     http_client: reqwest::Client,
+    observer: Box<dyn AuthObserver>,
 }
 
 impl Auth {
@@ -32,6 +34,7 @@ impl Auth {
             config,
             storage: Box::new(storage),
             http_client: reqwest::Client::new(),
+            observer: Box::new(NoObserver),
         })
     }
 
@@ -40,6 +43,17 @@ impl Auth {
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http_client = client;
         self
+    }
+
+    /// Report catacombs' events to `observer`.
+    #[must_use]
+    pub fn with_observer(mut self, observer: impl AuthObserver) -> Self {
+        self.observer = Box::new(observer);
+        self
+    }
+
+    pub(crate) fn observer(&self) -> &dyn AuthObserver {
+        self.observer.as_ref()
     }
 
     /// The configuration.

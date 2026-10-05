@@ -42,6 +42,8 @@ pub mod models;
 pub mod routes;
 pub mod storage;
 
+mod login;
+mod observer;
 mod state;
 
 // Re-exports for convenience
@@ -51,6 +53,7 @@ pub use models::{
     DiscordProfile, EncryptedToken, Entitlement, GuildId, GuildProfile, StoredTokens, Subscription,
     SubscriptionSource, SubscriptionTier, User,
 };
+pub use observer::{AuthEvent, AuthObserver, Flow, LoginWarning};
 pub use state::{Auth, HasAuth};
 #[cfg(feature = "memory-storage")]
 pub use storage::MemoryStorage;

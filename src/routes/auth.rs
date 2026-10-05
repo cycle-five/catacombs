@@ -14,18 +14,14 @@ use axum::{
     Json, Router,
 };
 use axum_extra::extract::cookie::CookieJar;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::{self, AuthenticatedUser},
-    config::PremiumConfig,
-    discord::{snowflake, Discord, DiscordEntitlement},
-    models::{
-        EncryptedToken, Entitlement, StoredTokens, Subscription, SubscriptionSource,
-        SubscriptionTier,
-    },
-    Auth, HasAuth, LoginError, StorageError,
+    discord::Discord,
+    models::{EncryptedToken, GuildId, StoredTokens},
+    Flow, HasAuth, LoginError, SubscriptionTier,
 };
 
 /// Create an Axum router with all auth routes.
@@ -52,6 +48,10 @@ pub fn auth_router<S: HasAuth + Clone>() -> Router<S> {
 #[derive(Debug, Deserialize)]
 pub struct CodeExchangeRequest {
     pub code: String,
+    /// The guild the Activity runs in, to read the user's profile there.
+    /// Needs the `guilds.members.read` scope. `null` or absent in a DM.
+    #[serde(default)]
+    pub guild_id: Option<GuildId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,69 +73,18 @@ pub struct UserResponse {
     pub is_premium: bool,
 }
 
-/// A completed Discord login: our JWT and Discord's own access token.
-pub(crate) struct Login {
-    pub jwt: String,
-    pub discord_access_token: String,
-}
-
-/// Exchange `code` with Discord, upsert the user, refresh entitlements, and
-/// mint our JWT. Shared by the SDK flow (`POST /exchange`) and the website
-/// flow (`GET /callback`), so the two cannot drift.
-pub(crate) async fn complete_login(auth: &Auth, code: &str) -> Result<Login, LoginError> {
-    let discord = Discord::new(auth.http_client(), &auth.config().discord);
-    let grant = discord.exchange_code(code).await?;
-    let profile = discord.profile(&grant.access_token).await?;
-    let config = auth.config();
-    let tokens = StoredTokens {
-        refresh_token: EncryptedToken::encrypt(
-            &grant.refresh_token,
-            &config.security.encryption_key,
-        )
-        .map_err(|e| {
-            LoginError::Storage(StorageError::Other(format!(
-                "encrypting the refresh token: {e}"
-            )))
-        })?,
-        expires_at: Utc::now() + chrono::Duration::seconds(grant.expires_in),
-    };
-    auth.storage().upsert_user(&profile, Some(&tokens)).await?;
-    if let Some(premium) = &config.discord.premium {
-        match discord.entitlements(premium, profile.id).await {
-            Ok(entitlements) => {
-                if let Err(e) =
-                    process_user_entitlements(auth, premium, profile.id, entitlements).await
-                {
-                    tracing::warn!(
-                        "Failed to process entitlements for user {}: {}",
-                        profile.id,
-                        e
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(
-                "Failed to fetch entitlements for user {}: {}",
-                profile.id,
-                e
-            ),
-        }
-    }
-    let jwt = auth::generate_token(profile.id, &profile.username, &config.security.jwt_secret)
-        .map_err(|_| LoginError::Session)?;
-    Ok(Login {
-        jwt,
-        discord_access_token: grant.access_token,
-    })
-}
-
 /// Exchange Discord authorization code for access token and create user session.
 pub async fn exchange_code<S: HasAuth + Clone>(
     State(state): State<S>,
     Json(payload): Json<CodeExchangeRequest>,
 ) -> Result<Json<TokenResponse>, LoginError> {
-    let auth = state.auth();
-    tracing::info!("Exchanging authorization code for access token");
-    let login = complete_login(auth, &payload.code).await?;
+    let login = crate::login::login(
+        state.auth(),
+        Flow::Exchange,
+        &payload.code,
+        payload.guild_id,
+    )
+    .await?;
     Ok(Json(TokenResponse {
         access_token: login.jwt,
         discord_access_token: Some(login.discord_access_token),
@@ -339,105 +288,6 @@ pub async fn get_current_user<S: HasAuth + Clone>(
         subscription_tier: db_user.subscription_tier,
         is_premium,
     }))
-}
-
-async fn process_user_entitlements(
-    auth: &Auth,
-    premium: &PremiumConfig,
-    user_id: i64,
-    entitlements: Vec<DiscordEntitlement>,
-) -> anyhow::Result<SubscriptionTier> {
-    let premium_sku_id = Some(premium.sku_id);
-
-    let mut highest_tier = SubscriptionTier::Free;
-    let mut subscription_expires: Option<DateTime<Utc>> = None;
-
-    for entitlement in entitlements {
-        if entitlement.deleted {
-            continue;
-        }
-
-        let ent_id: i64 = match snowflake(&entitlement.id).ok_or("not a snowflake") {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!("Failed to parse entitlement.id '{}': {}", entitlement.id, e);
-                continue;
-            }
-        };
-        let sku_id: i64 = match snowflake(&entitlement.sku_id).ok_or("not a snowflake") {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to parse entitlement.sku_id '{}': {}",
-                    entitlement.sku_id,
-                    e
-                );
-                continue;
-            }
-        };
-
-        // Store entitlement
-        if let Err(e) = auth
-            .storage()
-            .upsert_entitlement(&Entitlement {
-                entitlement_id: ent_id,
-                user_id,
-                sku_id,
-                entitlement_type: entitlement.entitlement_type,
-                is_test: false,
-                consumed: entitlement.consumed,
-                starts_at: entitlement.starts_at,
-                ends_at: entitlement.ends_at,
-            })
-            .await
-        {
-            tracing::warn!("Failed to upsert entitlement {}: {}", ent_id, e);
-            continue;
-        }
-
-        // Check if this entitlement grants premium
-        if let Some(premium_sku) = premium_sku_id {
-            if sku_id == premium_sku {
-                let is_active = match entitlement.ends_at {
-                    Some(ends) => ends > Utc::now(),
-                    None => true,
-                };
-
-                if is_active {
-                    highest_tier = SubscriptionTier::Premium;
-                    match (subscription_expires, entitlement.ends_at) {
-                        (None, ends) => subscription_expires = ends,
-                        (Some(current), Some(ends)) if ends > current => {
-                            subscription_expires = Some(ends);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    // Update user's subscription tier
-    if highest_tier != SubscriptionTier::Free {
-        auth.storage()
-            .set_subscription(
-                user_id,
-                Some(&Subscription {
-                    tier: highest_tier,
-                    source: SubscriptionSource::Discord,
-                    expires_at: subscription_expires,
-                }),
-            )
-            .await?;
-        tracing::info!(
-            "Updated user {} subscription to {:?} (expires: {:?})",
-            user_id,
-            highest_tier,
-            subscription_expires
-        );
-    }
-
-    Ok(highest_tier)
 }
 
 #[cfg(test)]

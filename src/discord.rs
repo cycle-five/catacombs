@@ -221,8 +221,6 @@ impl<'a> Discord<'a> {
     }
 
     /// The user's profile in `guild`. Needs the `guilds.members.read` scope.
-    // Called by the login flow in a later change.
-    #[allow(dead_code)]
     pub(crate) async fn guild_profile(
         &self,
         access_token: &str,

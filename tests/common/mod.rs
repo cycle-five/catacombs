@@ -14,7 +14,10 @@ use axum::{
     routing::{get, post},
     Form, Json, Router,
 };
-use catacombs::{Auth, Config, DiscordConfig, MemoryStorage, SecurityConfig, WebConfig};
+use catacombs::{
+    Auth, AuthEvent, AuthObserver, Config, DiscordConfig, Flow, LoginWarning, MemoryStorage,
+    PremiumConfig, SecurityConfig, WebConfig,
+};
 use serde::Serialize;
 
 pub const CLIENT_ID: &str = "client-id-123";
@@ -37,6 +40,9 @@ pub struct TokenRequest {
     pub form: HashMap<String, String>,
 }
 
+/// An entitlements request's authorization header and raw query.
+pub type EntitlementRequest = (Option<String>, Option<String>);
+
 #[derive(Debug, Clone, Default)]
 pub struct Recorded {
     pub token_requests: Arc<Mutex<Vec<TokenRequest>>>,
@@ -44,6 +50,10 @@ pub struct Recorded {
     pub me_requests: Arc<Mutex<Vec<Option<String>>>>,
     /// The guild id of each guild member request.
     pub member_requests: Arc<Mutex<Vec<String>>>,
+    /// What the entitlements endpoint answers.
+    pub entitlements_reply: Arc<Mutex<EntitlementsReply>>,
+    /// The authorization header and raw query of each entitlements request.
+    pub entitlement_requests: Arc<Mutex<Vec<EntitlementRequest>>>,
 }
 
 #[derive(Serialize)]
@@ -168,6 +178,21 @@ async fn member(
     }
 }
 
+async fn entitlements(
+    State(rec): State<Recorded>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    rec.entitlement_requests
+        .lock()
+        .unwrap()
+        .push((header(&headers, "authorization"), query));
+    match rec.entitlements_reply.lock().unwrap().clone() {
+        EntitlementsReply::List(list) => Json(list).into_response(),
+        EntitlementsReply::Fail(status) => status.into_response(),
+    }
+}
+
 /// Start the mock on an ephemeral port; returns its base URL.
 pub async fn spawn_mock_discord() -> (String, Recorded) {
     let rec = Recorded::default();
@@ -175,6 +200,7 @@ pub async fn spawn_mock_discord() -> (String, Recorded) {
         .route("/oauth2/token", post(token))
         .route("/users/@me", get(me))
         .route("/users/@me/guilds/{guild_id}/member", get(member))
+        .route("/applications/{app_id}/entitlements", get(entitlements))
         .with_state(rec.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -232,4 +258,109 @@ pub async fn body_string(resp: Response) -> String {
     use http_body_util::BodyExt;
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+pub const PREMIUM_SKU: i64 = 777;
+
+/// One observed login.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Seen {
+    pub flow: Flow,
+    pub user_id: Option<i64>,
+    pub reason: Option<&'static str>,
+    pub warnings: Vec<LoginWarning>,
+}
+
+#[derive(Default)]
+pub struct Recorder(pub Mutex<Vec<Seen>>);
+
+impl AuthObserver for Recorder {
+    fn on_event(&self, event: &AuthEvent<'_>) {
+        if let AuthEvent::Login {
+            flow,
+            result,
+            warnings,
+            ..
+        } = event
+        {
+            self.0.lock().unwrap().push(Seen {
+                flow: *flow,
+                user_id: result.as_ref().ok().copied(),
+                reason: result.as_ref().err().map(|e| e.reason()),
+                warnings: warnings.to_vec(),
+            });
+        }
+    }
+}
+
+impl Recorder {
+    pub fn seen(&self) -> Vec<Seen> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// What the mock's entitlements endpoint answers.
+#[derive(Debug, Clone)]
+pub enum EntitlementsReply {
+    List(Vec<MockEntitlement>),
+    Fail(StatusCode),
+}
+
+impl Default for EntitlementsReply {
+    fn default() -> Self {
+        Self::List(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MockEntitlement {
+    pub id: String,
+    pub sku_id: String,
+    #[serde(rename = "type")]
+    pub entitlement_type: i32,
+    pub deleted: bool,
+    pub consumed: bool,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+impl MockEntitlement {
+    /// An active premium entitlement that never ends.
+    pub fn premium_forever(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            sku_id: PREMIUM_SKU.to_string(),
+            entitlement_type: 8,
+            deleted: false,
+            consumed: false,
+            starts_at: None,
+            ends_at: None,
+        }
+    }
+}
+
+pub struct Built {
+    pub state: Arc<Auth>,
+    pub storage: Arc<MemoryStorage>,
+    pub events: Arc<Recorder>,
+}
+
+pub fn build(api_base: &str, premium: bool) -> Built {
+    let mut config = test_config(api_base);
+    if premium {
+        config.discord.premium = Some(PremiumConfig {
+            sku_id: PREMIUM_SKU,
+            bot_token: "bot-token".into(),
+        });
+    }
+    let storage = Arc::new(MemoryStorage::new());
+    let events = Arc::new(Recorder::default());
+    let state = Auth::new(config, storage.clone())
+        .unwrap()
+        .with_observer(events.clone());
+    Built {
+        state: Arc::new(state),
+        storage,
+        events,
+    }
 }

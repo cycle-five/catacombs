@@ -10,9 +10,7 @@ use base64::Engine;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    auth::SESSION_TTL_SECS, config::WebConfig, routes::auth::complete_login, HasAuth, LoginError,
-};
+use crate::{auth::SESSION_TTL_SECS, config::WebConfig, Flow, HasAuth, LoginError};
 
 /// Discord's authorize page (not the REST API base).
 pub const AUTHORIZE_URL: &str = "https://discord.com/oauth2/authorize";
@@ -164,7 +162,7 @@ pub async fn callback<S: HasAuth + Clone>(
         return Err(LoginError::BadState);
     }
 
-    let login = complete_login(auth, &code).await?;
+    let login = crate::login::login(auth, Flow::Web, &code, None).await?;
     let jar = jar.add(session_cookie(&auth.config().web, login.jwt));
     Ok((jar, Redirect::to(&return_to)))
 }
