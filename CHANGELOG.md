@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - Unreleased
+
+The host seam: catacombs now plugs into an application's own state,
+storage and metrics. See "Upgrading from 0.1" in the README.
+
+### Added
+
+- `HasAuth`, implemented for `Arc<T>`, so a router whose state is
+  `Arc<YourState>` can use catacombs' routes and extractor.
+- `AuthObserver`: one `AuthEvent::Login` per attempt, with the flow, the
+  user or `LoginError::reason()`, the elapsed time and warnings.
+- `LoginError` and `Rejection`.
+- `DiscordProfile` (with banner and accent colour) and `GuildProfile`.
+  `/exchange` accepts `guild_id` and stores the user's profile in that guild.
+- `router(Flows::Activity | Web | Both)`.
+- `encryption::generate_key` and `encryption::validate_key`.
+
+### Changed
+
+- `AppState` is now `Auth`. `Auth::new` returns an error for an encryption
+  key that is not 32 base64 bytes.
+- One `Storage` trait replaces `UserStorage` and `EntitlementStorage`. It
+  takes no encryption key: catacombs encrypts, and storage only sees
+  `EncryptedToken`. `MemoryStorage` no longer holds refresh tokens in
+  plaintext.
+- `/me` is no longer mounted by the router. `routes::me` remains for hosts
+  that want it.
+- Discord unreachable, or failing on its side, is 502, not 401.
+- A user without a custom avatar has `avatar_url: None`, not Discord's
+  default-avatar URL.
+- Premium is reconciled from entitlements on every login. Premium from
+  Discord ends when its entitlement does; manual and external premium is
+  never removed; an entitlements outage changes nothing.
+- `SqlxStorage` uses `catacombs_users`, `catacombs_entitlements` and
+  `catacombs_guild_profiles`, from a timestamp-versioned migration, and
+  `migrate()` tolerates a host's own migrations. It needs PostgreSQL 14+.
+- `DISCORD_PREMIUM_SKU_ID` that is not a number is now an error.
+
+### Removed
+
+- `ServerConfig` (and `HOST`/`PORT` in `from_env`). `DiscordConfig.bot_token`
+  and `premium_sku_id` moved into `premium: Option<PremiumConfig>`, and the
+  bot token is only required with a SKU.
+- `SharedState`, `auth_router`, `UserUpsertParams`, `storage_error`.
+
 ## [0.1.1] - 2026-10-04
 
 ### Fixed
@@ -64,7 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AES-256-GCM encryption for refresh token storage at rest
 - Axum router with auth endpoints (`/exchange`, `/refresh`, `/revoke`, `/logout`, `/me`)
 
-[Unreleased]: https://github.com/cycle-five/catacombs/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/cycle-five/catacombs/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/cycle-five/catacombs/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/cycle-five/catacombs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cycle-five/catacombs/releases/tag/v0.1.0
 [0.0.1]: https://github.com/cycle-five/catacombs/releases/tag/v0.0.1

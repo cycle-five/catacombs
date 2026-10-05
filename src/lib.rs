@@ -1,36 +1,35 @@
-//! Discord OAuth Template
+//! catacombs: "Log in with Discord" for axum services.
 //!
-//! A library for implementing Discord Activity `OAuth2` authentication
-//! with user management and subscription support.
+//! catacombs runs the `OAuth2` exchange with Discord, keeps users and their
+//! (encrypted) refresh tokens in a [`Storage`], and gives handlers an
+//! [`AuthenticatedUser`](auth::AuthenticatedUser). It owns the login
+//! lifecycle; the host owns what a user looks like.
 //!
 //! # Features
 //!
-//! - `sqlx-storage` (default): `PostgreSQL` storage via `SQLx`
-//! - `memory-storage`: In-memory storage for testing
+//! - `sqlx-storage` (default): [`SqlxStorage`], `PostgreSQL` 14+ through `SQLx`
+//! - `memory-storage`: [`MemoryStorage`], in-process
+//! - `rustls-tls` (default) or `native-tls`
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use catacombs::{Auth, Config, SqlxStorage, router, Flows};
 //! use std::sync::Arc;
+//! use catacombs::{router, Auth, Config, Flows, HasAuth, SqlxStorage};
 //!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     let config = Config::from_env()?;
-//!     let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
-//!     let storage = SqlxStorage::new(pool);
-//!     storage.migrate().await?;
-//!
-//!     let state = Arc::new(Auth::new(config, storage));
-//!
-//!     let app = axum::Router::new()
-//!         .nest("/auth", router(Flows::Both))
-//!         .with_state(state);
-//!
-//!     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-//!     axum::serve(listener, app).await?;
-//!     Ok(())
+//! struct AppState { auth: Auth /* , your own fields */ }
+//! impl HasAuth for AppState {
+//!     fn auth(&self) -> &Auth { &self.auth }
 //! }
+//!
+//! let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+//! let storage = SqlxStorage::new(pool);
+//! storage.migrate().await?;
+//! let auth = Auth::new(Config::from_env()?, storage)?;
+//!
+//! let app = axum::Router::new()
+//!     .nest("/auth", router(Flows::Activity))
+//!     .with_state(Arc::new(AppState { auth }));
 //! ```
 
 pub mod auth;

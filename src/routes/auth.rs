@@ -1,11 +1,13 @@
-//! Discord `OAuth2` authentication routes.
+//! Discord `OAuth2` authentication handlers.
 //!
 //! This module provides HTTP handlers for:
 //! - Code exchange (`OAuth2` authorization code -> access token)
 //! - Token refresh
 //! - Token revocation
-//! - User info retrieval
 //! - Logout
+//!
+//! [`router`](super::router) mounts these. [`me`] (the current user) is a
+//! handler the host mounts itself, where and if it wants it.
 
 use axum::{extract::State, http::StatusCode, Json};
 use axum_extra::extract::cookie::CookieJar;

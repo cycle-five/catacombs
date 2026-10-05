@@ -24,38 +24,49 @@ web dashboard signs in this second way.
 
 ```toml
 [dependencies]
-catacombs = "0.1"
+catacombs = "0.2"
 ```
 
 By default it keeps users in PostgreSQL through SQLx and uses rustls for TLS.
 The `memory-storage` feature swaps the database for an in-process map, which
 suits tests and small services that can afford to forget everyone on a
-restart. Be aware that memory storage keeps Discord refresh tokens in
-plaintext, while the database encrypts them with AES-256-GCM. The `native-tls`
-feature uses the system's OpenSSL in place of rustls. To use either one, turn
+restart. Memory storage holds refresh tokens encrypted, like any storage; a
+per-process key from `catacombs::encryption::generate_key()` is enough, since
+nothing outlives the process. The database storage needs PostgreSQL 14 or
+newer. The `native-tls` feature uses the system's OpenSSL in place of rustls. To use either one, turn
 off the default features and name both a storage and a TLS feature, for
 example `default-features = false, features = ["memory-storage", "rustls-tls"]`.
 
 Mounting the router is most of the work:
 
 ```rust
-use catacombs::{routes, Auth, Config, SqlxStorage};
 use std::sync::Arc;
+use catacombs::{router, Auth, Config, Flows, HasAuth, SqlxStorage};
 
-let config = Config::from_env()?;
+struct AppState { auth: Auth /* , your own fields */ }
+impl HasAuth for AppState {
+    fn auth(&self) -> &Auth { &self.auth }
+}
+
 let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
 let storage = SqlxStorage::new(pool);
 storage.migrate().await?;
+let auth = Auth::new(Config::from_env()?, storage)?;
 
 let app = axum::Router::new()
-    .nest("/auth", routes::auth_router())
-    .with_state(Arc::new(Auth::new(config, storage)?));
+    .nest("/auth", router(Flows::Activity))
+    .with_state(Arc::new(AppState { auth }));
 ```
+
+`Auth::new` checks the encryption key and returns an error if it is not 32
+base64 bytes. `Flows` picks which routes are mounted: `Activity` for
+`/exchange`, `/refresh` and `/revoke`, `Web` for `/login` and `/callback`, or
+`Both`. `/logout` is always mounted.
 
 `Config::from_env` reads the settings below, and `.env.example` has the full
 set with comments. `DATABASE_URL` is only read by the snippet above.
 `DISCORD_PREMIUM_SKU_ID` is optional, and entitlements are only fetched when it
-is set.
+is set. The bot token is only required with a SKU.
 
 ```bash
 DISCORD_CLIENT_ID=...
@@ -92,8 +103,44 @@ The session cookie is `SameSite=Lax`. That keeps other sites out, but not your
 own subdomains. Host the site on a domain whose subdomains you control, and
 have your own state-changing endpoints check `Origin` or require a JSON body.
 
-The rest of the router refreshes and revokes Discord tokens, and returns the
-current user from `/auth/me`. The rustdoc covers each route.
+The rest of the router refreshes and revokes Discord tokens. It does not mount
+`/me`; `catacombs::routes::me` is there if you want to route it yourself. The
+rustdoc covers each route.
+
+## Your own users table
+
+If your application already has a users table, implement `Storage` on a
+newtype around your pool instead of using `SqlxStorage`. It has five methods:
+`get_user`, `upsert_user`, `set_tokens`, `set_subscription` and
+`upsert_entitlement`. Tokens arrive as ciphertext in `StoredTokens`. Persist
+`refresh_token.as_str()` and read it back with `EncryptedToken::from_stored`;
+the storage never sees a key. `upsert_user` merges `profile.guilds` into what is
+already stored and never deletes guilds.
+
+## Metrics
+
+`Auth::with_observer` takes an `AuthObserver`, which is called once per login
+attempt with an `AuthEvent::Login`. The event carries the flow, the user or
+`LoginError::reason()`, the elapsed time and any warnings.
+
+## Guild profiles
+
+To read a user's profile in a guild, such as their server nickname, send
+`guild_id` to `/exchange` and request the `guilds.members.read` scope. Profiles
+accumulate in storage across logins.
+
+## Upgrading from 0.1
+
+- `AppState` became `Auth`, built with `Auth::new(config, storage)?` (it checks
+  the encryption key); implement `HasAuth` instead of `FromRef`.
+- `auth_router()` became `router(Flows::...)`, and `/me` is no longer mounted
+  (`routes::me` is still available).
+- `UserStorage` and `EntitlementStorage` became `Storage`.
+- `ServerConfig` was removed, and `bot_token` and `premium_sku_id` became
+  `premium: Option<PremiumConfig>`.
+- `SqlxStorage` uses `catacombs_*` tables; data in 0.1's `users` and
+  `entitlements` tables is not migrated.
+- `User.refresh_token` and `User.token_expires_at` became `User.tokens`.
 
 ## Working on it
 
