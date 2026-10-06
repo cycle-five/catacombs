@@ -8,7 +8,7 @@ use axum::{
     Router,
 };
 use base64::Engine;
-use catacombs::{auth::validate_token, router, Flows, Storage};
+use catacombs::{auth::validate_token, router, EncryptedToken, Flows, Storage, StoredTokens};
 use common::*;
 use tower::ServiceExt;
 
@@ -169,4 +169,46 @@ async fn the_stored_profile_has_banner_and_accent_and_no_fake_avatar() {
         )
     );
     assert_eq!(profile.accent_color, Some(0x11_22_33));
+}
+
+#[tokio::test]
+async fn a_stored_token_that_does_not_decrypt_is_401_and_never_reaches_discord() {
+    let (base, rec) = spawn_mock_discord().await;
+    let built = build(&base, false);
+    let app = router(Flows::Activity).with_state(built.state.clone());
+
+    let jwt = access_token(app.clone().oneshot(exchange("good-code")).await.unwrap()).await;
+    let user_id: i64 = validate_token(&jwt, &test_config(&base).security.jwt_secret)
+        .unwrap()
+        .sub
+        .parse()
+        .unwrap();
+    built
+        .storage
+        .set_tokens(
+            user_id,
+            Some(&StoredTokens {
+                refresh_token: EncryptedToken::from_stored("not-ciphertext".into()),
+                expires_at: chrono::Utc::now(),
+            }),
+        )
+        .await
+        .unwrap();
+
+    let resp = app
+        .oneshot(
+            Request::post("/refresh")
+                .header(header::AUTHORIZATION, format!("Bearer {jwt}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        rec.token_requests.lock().unwrap().len(),
+        1,
+        "only the login's exchange reached Discord"
+    );
 }
