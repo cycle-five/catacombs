@@ -99,8 +99,14 @@ pub async fn refresh_token<S: HasAuth + Clone>(
     })?;
     let key = &auth.config().security.encryption_key;
     let current_refresh_token = stored.refresh_token.decrypt(key).map_err(|e| {
-        tracing::error!("Failed to decrypt the stored refresh token: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        // Written under another key, or corrupt. Only a new login replaces
+        // it, and 401 is what sends a client to log in again; a 500 would
+        // have it retry a refresh that cannot succeed.
+        tracing::warn!(
+            "The stored refresh token for user {} cannot be decrypted: {e}",
+            user.user_id
+        );
+        StatusCode::UNAUTHORIZED
     })?;
 
     // Refresh with Discord
