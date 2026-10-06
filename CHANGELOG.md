@@ -55,6 +55,12 @@ storage and metrics. See "Upgrading from 0.1" in the README.
   `migrate()` tolerates a host's own migrations. It needs PostgreSQL 14+.
 - `DISCORD_PREMIUM_SKU_ID` that is not a number is now an error.
 
+### Fixed
+
+- `Cargo.toml` listed the category `api`, which crates.io does not have, so
+  publishing v0.1.1 was refused (400). It is now
+  `web-programming::http-server`.
+
 ### Removed
 
 - `ServerConfig` (and `HOST`/`PORT` in `from_env`). `DiscordConfig.bot_token`
