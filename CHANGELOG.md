@@ -37,6 +37,8 @@ storage and metrics. See "Upgrading from 0.1" in the README.
 - Discord unreachable, or failing on its side, is 502, not 401.
 - `/refresh` answers 401, not 500, when the stored refresh token cannot be
   decrypted: only a new login can replace it.
+- Premium ignores a consumed entitlement: it is still stored, but grants
+  nothing.
 - A user without a custom avatar has `avatar_url: None`, not Discord's
   default-avatar URL.
 - Premium is reconciled from entitlements on every login. Premium from

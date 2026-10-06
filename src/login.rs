@@ -152,7 +152,8 @@ async fn reconcile_premium(
         if let Err(err) = storage.upsert_entitlement(&record).await {
             tracing::warn!("entitlement {entitlement_id} not stored: {err}");
         }
-        if sku_id != premium.sku_id {
+        // A consumed entitlement is spent: it is stored, but grants nothing.
+        if sku_id != premium.sku_id || e.consumed {
             continue;
         }
         match e.ends_at {

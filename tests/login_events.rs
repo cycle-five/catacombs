@@ -185,6 +185,34 @@ async fn premium_from_discord_ends_when_the_entitlement_is_gone() {
     assert_eq!(user.subscription_tier, SubscriptionTier::Free);
 }
 
+/// A consumed entitlement is spent: it is stored, but grants no premium.
+#[tokio::test]
+async fn a_consumed_premium_entitlement_grants_nothing() {
+    let (base, rec) = spawn_mock_discord().await;
+    *rec.entitlements_reply.lock().unwrap() = EntitlementsReply::List(vec![MockEntitlement {
+        consumed: true,
+        ..MockEntitlement::premium_forever("1")
+    }]);
+    let built = build(&base, true);
+    seed_premium(&built, SubscriptionSource::Discord).await;
+
+    assert_eq!(
+        exchange(&built, r#"{"code":"good-code"}"#).await,
+        StatusCode::OK
+    );
+
+    let user = built.storage.get_user(user_id()).await.unwrap().unwrap();
+    assert_eq!(
+        user.subscription_tier,
+        SubscriptionTier::Free,
+        "spent premium from Discord ends"
+    );
+    assert!(
+        built.storage.entitlement(1).is_some(),
+        "the consumed entitlement is still stored"
+    );
+}
+
 #[tokio::test]
 async fn premium_granted_by_hand_survives_a_login_without_entitlements() {
     let (base, _rec) = spawn_mock_discord().await;
