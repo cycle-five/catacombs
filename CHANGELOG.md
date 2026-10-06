@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-06
 
 The host seam: catacombs now plugs into an application's own state,
 storage and metrics. See "Upgrading from 0.1" in the README.
@@ -84,8 +84,7 @@ storage and metrics. See "Upgrading from 0.1" in the README.
 ### Changed
 
 - MSRV is 1.89, because `uuid` 1.27 requires it.
-- Published to crates.io. The package leaves out CI and local-dev files, and
-  docs.rs builds the docs with every feature enabled.
+- Packaged for crates.io (CI and local-dev files left out; docs.rs builds every feature), but the publish was refused over a category slug. 0.2.0 is the first version on crates.io.
 
 ## [0.1.0] - 2026-09-30
 

@@ -332,12 +332,23 @@ For RuneCast, the switch must not change:
 
 - route paths;
 - the `TokenResponse` fields;
-- the status codes for exchange, refresh and revoke;
+- the status codes for refresh and revoke;
 - 204 from revoke and logout.
 
-**One deliberate change:** a logout *without* a valid token gets 204 instead
-of 401. catacombs adopted this in 0.1.0 so that logout always clears the
-session cookie. The RuneCast PR calls it out.
+The switch makes these deliberate changes. RuneCast's
+`tests/auth_contract/changes.rs` is the authoritative list.
+
+- At exchange, an unreachable Discord, a 5xx, a 429, or a 200 whose body is
+  not a grant gets 502 instead of 401.
+- A malformed `guild_id` at exchange gets 422 instead of being ignored.
+- Avatar and banner URLs gain `?size=1024`, and animated avatars are `.gif`.
+- A logout without a valid token gets 204 instead of 401. catacombs adopted
+  this in 0.1.0 so that logout can always clear the session cookie.
+- Logout expires the `catacombs_session` cookie when the request carries it. A
+  Bearer-only logout gets no `Set-Cookie`.
+
+This section was amended on 2026-10-06, after the switch was implemented, so it
+now differs from the original design.
 
 ## Migration
 
