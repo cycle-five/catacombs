@@ -24,47 +24,67 @@ web dashboard signs in this second way.
 
 ```toml
 [dependencies]
-catacombs = "0.1"
+catacombs = "0.2"
 ```
 
 By default it keeps users in PostgreSQL through SQLx and uses rustls for TLS.
 The `memory-storage` feature swaps the database for an in-process map, which
 suits tests and small services that can afford to forget everyone on a
-restart. Be aware that memory storage keeps Discord refresh tokens in
-plaintext, while the database encrypts them with AES-256-GCM. The `native-tls`
-feature uses the system's OpenSSL in place of rustls. To use either one, turn
-off the default features and name both a storage and a TLS feature, for
-example `default-features = false, features = ["memory-storage", "rustls-tls"]`.
+restart. Memory storage holds refresh tokens encrypted, like any storage; a
+per-process key from `catacombs::encryption::generate_key()` is enough, since
+nothing outlives the process. The database storage needs PostgreSQL 14 or
+newer. The `native-tls` feature uses the system's OpenSSL in place of rustls.
+To use either one, turn off the default features and name both a storage and a
+TLS feature, for example
+`default-features = false, features = ["memory-storage", "rustls-tls"]`.
 
 Mounting the router is most of the work:
 
 ```rust
-use catacombs::{routes, AppState, Config, SqlxStorage};
 use std::sync::Arc;
+use catacombs::{router, Auth, Config, Flows, HasAuth, SqlxStorage};
 
-let config = Config::from_env()?;
+struct AppState { auth: Auth /* , your own fields */ }
+impl HasAuth for AppState {
+    fn auth(&self) -> &Auth { &self.auth }
+}
+
 let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
 let storage = SqlxStorage::new(pool);
 storage.migrate().await?;
+let auth = Auth::new(Config::from_env()?, storage)?;
 
 let app = axum::Router::new()
-    .nest("/auth", routes::auth_router())
-    .with_state(Arc::new(AppState::new(config, storage)));
+    // Flows::Activity serves /auth/exchange, /refresh and /revoke (SDK and
+    // Activity logins). Flows::Web serves /auth/login and /auth/callback
+    // (website logins). Flows::Both serves all of them.
+    .nest("/auth", router(Flows::Activity))
+    .with_state(Arc::new(AppState { auth }));
 ```
+
+`storage.migrate()` tolerates migrations that are not its own. A host that
+runs its own sqlx migrator on the same database must call
+`set_ignore_missing(true)` on that migrator too, or it will refuse to start
+because of catacombs' migration.
+
+`Auth::new` checks the encryption key and returns an error if it is not 32
+base64 bytes. `Flows` picks which routes are mounted: `Activity` for
+`/exchange`, `/refresh` and `/revoke`, `Web` for `/login` and `/callback`, or
+`Both`. `/logout` is always mounted.
 
 `Config::from_env` reads the settings below, and `.env.example` has the full
 set with comments. `DATABASE_URL` is only read by the snippet above.
 `DISCORD_PREMIUM_SKU_ID` is optional, and entitlements are only fetched when it
-is set.
+is set. The bot token is only required with a SKU.
 
 ```bash
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
-DISCORD_BOT_TOKEN=...
 DISCORD_REDIRECT_URI=https://example.com/auth/callback
 JWT_SECRET=...
 ENCRYPTION_KEY=...             # openssl rand -base64 32
 DISCORD_PREMIUM_SKU_ID=...     # optional
+DISCORD_BOT_TOKEN=...          # required only with DISCORD_PREMIUM_SKU_ID
 ```
 
 In a handler, ask for an `AuthenticatedUser`, and requests without a valid
@@ -82,18 +102,58 @@ The extractor looks for the session cookie first, then an
 `Authorization: Bearer` header, and finally a `?token=` query parameter. That
 last one is for WebSocket clients, which can't set headers.
 
-For the website flow, register `<your origin>/auth/callback` as a redirect in
-the Discord developer portal, and set `DISCORD_REDIRECT_URI` to the same URL.
-Then link people to `/auth/login?return_to=/where/next`. Only same-site paths
-are accepted for `return_to`. `POST /auth/logout` signs someone out. Scopes,
-the cookie's name and its `Secure` flag live in `WebConfig`.
+For the website flow, mount `Flows::Web` or `Flows::Both` (the snippet above
+mounts `Flows::Activity`, which has no `/auth/login`). Register
+`<your origin>/auth/callback` as a redirect in the Discord developer portal,
+and set `DISCORD_REDIRECT_URI` to the same URL. Then link people to
+`/auth/login?return_to=/where/next`. Only same-site paths are accepted for
+`return_to`. `POST /auth/logout` signs someone out. Scopes, the cookie's name
+and its `Secure` flag live in `WebConfig`.
 
 The session cookie is `SameSite=Lax`. That keeps other sites out, but not your
 own subdomains. Host the site on a domain whose subdomains you control, and
 have your own state-changing endpoints check `Origin` or require a JSON body.
 
-The rest of the router refreshes and revokes Discord tokens, and returns the
-current user from `/auth/me`. The rustdoc covers each route.
+The rest of the router refreshes and revokes Discord tokens. It does not mount
+`/me`; `catacombs::routes::me` is there if you want to route it yourself, with
+your state type named:
+`.route("/me", get(catacombs::routes::me::<Arc<AppState>>))`. The rustdoc
+covers each route.
+
+## Your own users table
+
+If your application already has a users table, implement `Storage` on a
+newtype around your pool instead of using `SqlxStorage`. It has five methods:
+`get_user`, `upsert_user`, `set_tokens`, `set_subscription` and
+`upsert_entitlement`. Tokens arrive as ciphertext in `StoredTokens`. Persist
+`refresh_token.as_str()` and read it back with `EncryptedToken::from_stored`;
+the storage never sees a key. `upsert_user` merges `profile.guilds` into what is
+already stored and never deletes guilds.
+
+## Metrics
+
+`Auth::with_observer` takes an `AuthObserver`, which is called once per login
+attempt with an `AuthEvent::Login`. The event carries the flow, the user or
+`LoginError::reason()`, the elapsed time and any warnings.
+
+## Guild profiles
+
+To read a user's profile in a guild, such as their server nickname, send
+`guild_id` to `/exchange` and request the `guilds.members.read` scope. Profiles
+accumulate in storage across logins.
+
+## Upgrading from 0.1
+
+- `AppState` became `Auth`, built with `Auth::new(config, storage)?` (it checks
+  the encryption key); implement `HasAuth` instead of `FromRef`.
+- `auth_router()` became `router(Flows::...)`, and `/me` is no longer mounted
+  (`routes::me` is still available, as `me::<Arc<AppState>>`).
+- `UserStorage` and `EntitlementStorage` became `Storage`.
+- `ServerConfig` was removed, and `bot_token` and `premium_sku_id` became
+  `premium: Option<PremiumConfig>`.
+- `SqlxStorage` uses `catacombs_*` tables; data in 0.1's `users` and
+  `entitlements` tables is not migrated.
+- `User.refresh_token` and `User.token_expires_at` became `User.tokens`.
 
 ## Working on it
 

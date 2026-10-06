@@ -33,10 +33,26 @@ pub enum SubscriptionSource {
     External,
 }
 
+/// A user's subscription, as storage records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Subscription {
+    /// The tier granted.
+    pub tier: SubscriptionTier,
+    /// Where it came from.
+    pub source: SubscriptionSource,
+    /// When it ends. `None` means it does not.
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[cfg(feature = "sqlx-storage")]
 impl sqlx::Type<sqlx::Postgres> for SubscriptionTier {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    // The columns are VARCHAR; String's own check accepts every text type.
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
     }
 }
 
@@ -71,6 +87,11 @@ impl sqlx::Type<sqlx::Postgres> for SubscriptionSource {
     fn type_info() -> sqlx::postgres::PgTypeInfo {
         <String as sqlx::Type<sqlx::Postgres>>::type_info()
     }
+
+    // The columns are VARCHAR; String's own check accepts every text type.
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <String as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -81,7 +102,8 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for SubscriptionSource {
             "discord" => Ok(Self::Discord),
             "manual" => Ok(Self::Manual),
             "external" => Ok(Self::External),
-            _ => Ok(Self::Discord),
+            // Unknown is Manual, not Discord: only Discord premium is ever cleared.
+            _ => Ok(Self::Manual),
         }
     }
 }

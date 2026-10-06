@@ -1,6 +1,6 @@
 [package]
 name = "catacombs"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
@@ -10,7 +10,7 @@ authors = ["Cycle Five <cycle.five@proton.me>"]
 keywords = ["discord", "oauth", "authentication", "axum"]
 categories = ["authentication", "web-programming", "api"]
 readme = "README.md"
-exclude = [".github/", "docker-compose.yml", "rustfmt.toml"]
+exclude = [".github/", "docker-compose.yml", "rustfmt.toml", "docs/"]
 
 [package.metadata.docs.rs]
 all-features = true

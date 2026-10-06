@@ -5,20 +5,24 @@ mod common;
 use axum::{
     body::Body,
     http::{header, Request, Response, StatusCode},
+    routing::get as axum_get,
     Router,
 };
 use catacombs::{
     auth::validate_token,
+    router,
     routes::{
-        auth_router,
+        me,
         web::{AUTHORIZE_URL, RETURN_COOKIE, STATE_COOKIE},
     },
+    Flows,
 };
 use common::*;
+use std::sync::Arc;
 use tower::ServiceExt;
 
 fn app(api_base: &str) -> Router {
-    auth_router().with_state(test_state(api_base))
+    router(Flows::Web).with_state(test_state(api_base))
 }
 
 fn set_cookies<B>(resp: &Response<B>) -> Vec<String> {
@@ -186,7 +190,9 @@ async fn cancelling_on_discord_returns_the_user_logged_out() {
 #[tokio::test]
 async fn the_session_cookie_authenticates_me() {
     let (base, _rec) = spawn_mock_discord().await;
-    let app = app(&base);
+    let app = router(Flows::Web)
+        .route("/me", axum_get(me::<Arc<catacombs::Auth>>))
+        .with_state(test_state(&base));
     let login = get(
         app.clone(),
         "/callback?code=good&state=abc",
@@ -196,10 +202,10 @@ async fn the_session_cookie_authenticates_me() {
     let set = set_cookies(&login);
     let jwt = value(cookie(&set, "catacombs_session").unwrap());
 
-    let me = get(app, "/me", Some(&format!("catacombs_session={jwt}"))).await;
+    let me_resp = get(app, "/me", Some(&format!("catacombs_session={jwt}"))).await;
 
-    assert_eq!(me.status(), StatusCode::OK);
-    assert!(body_string(me).await.contains(MOCK_USER_ID));
+    assert_eq!(me_resp.status(), StatusCode::OK);
+    assert!(body_string(me_resp).await.contains(MOCK_USER_ID));
 }
 
 #[tokio::test]
@@ -222,7 +228,7 @@ async fn post(app: Router, uri: &str, cookie: Option<&str>) -> Response<Body> {
 async fn logout_clears_the_session_cookie_and_the_stored_tokens() {
     let (base, _rec) = spawn_mock_discord().await;
     let state = test_state(&base);
-    let app = auth_router().with_state(state.clone());
+    let app = router(Flows::Web).with_state(state.clone());
     let login = get(
         app.clone(),
         "/callback?code=good&state=abc",
@@ -231,11 +237,8 @@ async fn logout_clears_the_session_cookie_and_the_stored_tokens() {
     .await;
     let jwt = value(cookie(&set_cookies(&login), "catacombs_session").unwrap());
     let user_id: i64 = MOCK_USER_ID.parse().unwrap();
-    let before = state.storage.get_user(user_id, "k").await.unwrap().unwrap();
-    assert!(
-        before.refresh_token.is_some(),
-        "login stored a refresh token"
-    );
+    let before = state.storage().get_user(user_id).await.unwrap().unwrap();
+    assert!(before.tokens.is_some(), "login stored a refresh token");
 
     let resp = post(app, "/logout", Some(&format!("catacombs_session={jwt}"))).await;
 
@@ -244,8 +247,8 @@ async fn logout_clears_the_session_cookie_and_the_stored_tokens() {
     let cleared = cookie(&set, "catacombs_session").expect("session cookie cleared");
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
     assert!(cleared.contains("Secure"), "{cleared}");
-    let after = state.storage.get_user(user_id, "k").await.unwrap().unwrap();
-    assert!(after.refresh_token.is_none());
+    let after = state.storage().get_user(user_id).await.unwrap().unwrap();
+    assert!(after.tokens.is_none());
 }
 
 #[tokio::test]
@@ -262,4 +265,19 @@ async fn logout_without_a_valid_session_still_clears_the_cookie() {
     assert!(cookie(&set, "catacombs_session")
         .expect("cleared")
         .contains("Max-Age=0"));
+}
+
+#[tokio::test]
+async fn a_web_login_is_reported_as_the_web_flow() {
+    let (base, _rec) = spawn_mock_discord().await;
+    let built = build(&base, false);
+    let app = router(Flows::Web).with_state(built.state.clone());
+    let resp = get(
+        app,
+        "/callback?code=good-code&state=abc",
+        Some(&format!("{STATE_COOKIE}=abc")),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(built.events.seen()[0].flow, catacombs::Flow::Web);
 }

@@ -9,16 +9,13 @@ pub struct Config {
     pub discord: DiscordConfig,
     /// Security-related configuration.
     pub security: SecurityConfig,
-    /// Server configuration.
-    #[serde(default)]
-    pub server: ServerConfig,
     /// The website flow: `/login`, `/callback` and the session cookie.
     #[serde(default)]
     pub web: WebConfig,
 }
 
 /// Discord `OAuth2` and API configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct DiscordConfig {
     /// Discord application client ID.
     pub client_id: String,
@@ -26,19 +23,27 @@ pub struct DiscordConfig {
     pub client_secret: String,
     /// `OAuth2` redirect URI.
     pub redirect_uri: String,
-    /// Discord bot token (required for entitlements API).
-    pub bot_token: String,
-    /// Optional SKU ID for premium subscription entitlements.
+    /// Premium through Discord entitlements. `None` turns entitlement checks off.
     #[serde(default)]
-    pub premium_sku_id: Option<i64>,
+    pub premium: Option<PremiumConfig>,
     /// Base URL of Discord's REST API. Overridable so tests can point the
     /// token and user calls at a local mock.
     #[serde(default = "default_api_base")]
     pub api_base: String,
 }
 
+/// Which SKU makes a user premium, and the bot token that may read the
+/// application's entitlements.
+#[derive(Clone, Deserialize)]
+pub struct PremiumConfig {
+    /// The SKU whose active entitlement grants premium.
+    pub sku_id: i64,
+    /// Bot token for the entitlements API.
+    pub bot_token: String,
+}
+
 /// Security configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct SecurityConfig {
     /// Secret key for JWT token signing.
     pub jwt_secret: String,
@@ -46,15 +51,35 @@ pub struct SecurityConfig {
     pub encryption_key: String,
 }
 
-/// Server configuration.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ServerConfig {
-    /// Host to bind to.
-    #[serde(default = "default_host")]
-    pub host: String,
-    /// Port to listen on.
-    #[serde(default = "default_port")]
-    pub port: u16,
+// Hand-written so that logging a `Config` never prints a secret.
+impl std::fmt::Debug for DiscordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[redacted]")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("premium", &self.premium)
+            .field("api_base", &self.api_base)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for PremiumConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PremiumConfig")
+            .field("sku_id", &self.sku_id)
+            .field("bot_token", &"[redacted]")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SecurityConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityConfig")
+            .field("jwt_secret", &"[redacted]")
+            .field("encryption_key", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Settings for the browser redirect flow and its session cookie.
@@ -99,72 +124,46 @@ pub fn default_api_base() -> String {
     "https://discord.com/api/v10".to_string()
 }
 
-fn default_host() -> String {
-    "0.0.0.0".to_string()
-}
-
-fn default_port() -> u16 {
-    3000
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            host: default_host(),
-            port: default_port(),
-        }
-    }
-}
-
 impl Config {
     /// Load configuration from environment variables.
     ///
-    /// Expected environment variables:
-    /// - `DISCORD_CLIENT_ID`
-    /// - `DISCORD_CLIENT_SECRET`
-    /// - `DISCORD_REDIRECT_URI`
-    /// - `DISCORD_BOT_TOKEN`
-    /// - `DISCORD_PREMIUM_SKU_ID` (optional)
+    /// - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`
+    /// - `DISCORD_PREMIUM_SKU_ID` (optional). When set, `DISCORD_BOT_TOKEN`
+    ///   is required too.
     /// - `DISCORD_API_BASE` (optional, defaults to Discord's v10 API)
     /// - `JWT_SECRET`
-    /// - `ENCRYPTION_KEY`
-    /// - `HOST` (optional, defaults to "0.0.0.0")
-    /// - `PORT` (optional, defaults to 3000)
+    /// - `ENCRYPTION_KEY` (base64 of 32 bytes: `openssl rand -base64 32`)
+    ///
+    /// # Errors
+    /// [`ConfigError::MissingEnv`] for a missing variable,
+    /// [`ConfigError::InvalidEnv`] for a malformed one.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let discord = DiscordConfig {
-            client_id: std::env::var("DISCORD_CLIENT_ID")
-                .map_err(|_| ConfigError::MissingEnv("DISCORD_CLIENT_ID"))?,
-            client_secret: std::env::var("DISCORD_CLIENT_SECRET")
-                .map_err(|_| ConfigError::MissingEnv("DISCORD_CLIENT_SECRET"))?,
-            redirect_uri: std::env::var("DISCORD_REDIRECT_URI")
-                .map_err(|_| ConfigError::MissingEnv("DISCORD_REDIRECT_URI"))?,
-            bot_token: std::env::var("DISCORD_BOT_TOKEN")
-                .map_err(|_| ConfigError::MissingEnv("DISCORD_BOT_TOKEN"))?,
-            premium_sku_id: std::env::var("DISCORD_PREMIUM_SKU_ID")
-                .ok()
-                .and_then(|s| s.parse().ok()),
-            api_base: std::env::var("DISCORD_API_BASE").unwrap_or_else(|_| default_api_base()),
-        };
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
 
-        let security = SecurityConfig {
-            jwt_secret: std::env::var("JWT_SECRET")
-                .map_err(|_| ConfigError::MissingEnv("JWT_SECRET"))?,
-            encryption_key: std::env::var("ENCRYPTION_KEY")
-                .map_err(|_| ConfigError::MissingEnv("ENCRYPTION_KEY"))?,
+    fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        let need = |name: &'static str| get(name).ok_or(ConfigError::MissingEnv(name));
+        let premium = match get("DISCORD_PREMIUM_SKU_ID") {
+            Some(raw) => Some(PremiumConfig {
+                sku_id: raw
+                    .parse()
+                    .map_err(|_| ConfigError::InvalidEnv("DISCORD_PREMIUM_SKU_ID"))?,
+                bot_token: need("DISCORD_BOT_TOKEN")?,
+            }),
+            None => None,
         };
-
-        let server = ServerConfig {
-            host: std::env::var("HOST").unwrap_or_else(|_| default_host()),
-            port: std::env::var("PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_port),
-        };
-
         Ok(Self {
-            discord,
-            security,
-            server,
+            discord: DiscordConfig {
+                client_id: need("DISCORD_CLIENT_ID")?,
+                client_secret: need("DISCORD_CLIENT_SECRET")?,
+                redirect_uri: need("DISCORD_REDIRECT_URI")?,
+                premium,
+                api_base: get("DISCORD_API_BASE").unwrap_or_else(default_api_base),
+            },
+            security: SecurityConfig {
+                jwt_secret: need("JWT_SECRET")?,
+                encryption_key: need("ENCRYPTION_KEY")?,
+            },
             web: WebConfig::default(),
         })
     }
@@ -175,17 +174,85 @@ impl Config {
 pub enum ConfigError {
     #[error("missing required environment variable: {0}")]
     MissingEnv(&'static str),
+    #[error("invalid value for environment variable: {0}")]
+    InvalidEnv(&'static str),
+    #[error("invalid ENCRYPTION_KEY: {0}")]
+    InvalidEncryptionKey(String),
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
+    const BASE: &[(&str, &str)] = &[
+        ("DISCORD_CLIENT_ID", "id"),
+        ("DISCORD_CLIENT_SECRET", "secret"),
+        ("DISCORD_REDIRECT_URI", "https://example.test/auth/callback"),
+        ("JWT_SECRET", "jwt"),
+        ("ENCRYPTION_KEY", "key"),
+    ];
+
+    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |name| map.get(name).cloned()
+    }
+
     #[test]
-    fn test_server_config_defaults() {
-        let config = ServerConfig::default();
-        assert_eq!(config.host, "0.0.0.0");
-        assert_eq!(config.port, 3000);
+    fn without_a_premium_sku_no_bot_token_is_needed() {
+        let config = Config::from_lookup(lookup(BASE)).unwrap();
+        assert!(config.discord.premium.is_none());
+        assert_eq!(config.discord.api_base, default_api_base());
+    }
+
+    #[test]
+    fn a_premium_sku_requires_a_bot_token() {
+        let mut vars = BASE.to_vec();
+        vars.push(("DISCORD_PREMIUM_SKU_ID", "42"));
+        let err = Config::from_lookup(lookup(&vars)).unwrap_err();
+        assert!(matches!(err, ConfigError::MissingEnv("DISCORD_BOT_TOKEN")));
+
+        vars.push(("DISCORD_BOT_TOKEN", "bot"));
+        let premium = Config::from_lookup(lookup(&vars))
+            .unwrap()
+            .discord
+            .premium
+            .unwrap();
+        assert_eq!(premium.sku_id, 42);
+        assert_eq!(premium.bot_token, "bot");
+    }
+
+    #[test]
+    fn a_malformed_sku_is_an_error_not_silence() {
+        let mut vars = BASE.to_vec();
+        vars.push(("DISCORD_PREMIUM_SKU_ID", "not-a-number"));
+        vars.push(("DISCORD_BOT_TOKEN", "bot"));
+        let err = Config::from_lookup(lookup(&vars)).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidEnv("DISCORD_PREMIUM_SKU_ID")
+        ));
+    }
+
+    #[test]
+    fn debug_output_holds_no_secret() {
+        let vars = [
+            ("DISCORD_CLIENT_ID", "id"),
+            ("DISCORD_CLIENT_SECRET", "s3cret-client"),
+            ("DISCORD_REDIRECT_URI", "https://example.test/auth/callback"),
+            ("DISCORD_PREMIUM_SKU_ID", "42"),
+            ("DISCORD_BOT_TOKEN", "s3cret-bot"),
+            ("JWT_SECRET", "s3cret-jwt"),
+            ("ENCRYPTION_KEY", "s3cret-key"),
+        ];
+        let config = Config::from_lookup(lookup(&vars)).unwrap();
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("s3cret"), "a secret leaked: {shown}");
+        assert!(shown.contains("[redacted]"));
     }
 
     #[test]

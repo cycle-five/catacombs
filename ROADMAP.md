@@ -42,10 +42,9 @@ It belongs in `WebConfig`.
 
 **Identity-only logins.** A site such as the CrackTunes dashboard only needs
 to know who you are. It never calls Discord on your behalf, but catacombs
-still keeps your Discord access and refresh tokens. An option not to store
-them would shrink what a leak exposes. It matters most with `memory-storage`,
-which keeps refresh tokens in plaintext because it was written for tests, and
-which is what the dashboard runs on.
+still keeps your Discord access and refresh tokens. Storage now accepts
+`tokens: None`, but nothing chooses it yet. What remains is a `WebConfig`
+option to skip storing tokens, which would shrink what a leak exposes.
 
 ## Maintenance
 

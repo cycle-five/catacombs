@@ -7,7 +7,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use generic_array::GenericArray;
 
 /// Encrypts data using AES-256-GCM
-pub fn encrypt(data: &str, key: &str) -> Result<String> {
+pub(crate) fn encrypt(data: &str, key: &str) -> Result<String> {
     // Decode the base64-encoded key
     let key_bytes = BASE64
         .decode(key)
@@ -39,7 +39,7 @@ pub fn encrypt(data: &str, key: &str) -> Result<String> {
 }
 
 /// Decrypts data using AES-256-GCM
-pub fn decrypt(encrypted_data: &str, key: &str) -> Result<String> {
+pub(crate) fn decrypt(encrypted_data: &str, key: &str) -> Result<String> {
     // Decode the base64-encoded key
     let key_bytes = BASE64
         .decode(key)
@@ -70,6 +70,32 @@ pub fn decrypt(encrypted_data: &str, key: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Decryption failed: {e}"))?;
 
     String::from_utf8(plaintext).context("Failed to convert decrypted data to string")
+}
+
+/// Check that `key` is a base64-encoded 32-byte AES-256 key.
+///
+/// # Errors
+/// When `key` is not base64, or does not decode to 32 bytes.
+pub fn validate_key(key: &str) -> Result<()> {
+    let bytes = BASE64
+        .decode(key)
+        .context("encryption key is not valid base64")?;
+    if bytes.len() != 32 {
+        anyhow::bail!(
+            "encryption key must decode to 32 bytes, got {}",
+            bytes.len()
+        );
+    }
+    Ok(())
+}
+
+/// A new random key: for a process whose storage does not outlive it
+/// (memory storage). Persistent storage needs a fixed key from configuration.
+#[must_use]
+pub fn generate_key() -> String {
+    let mut bytes = [0u8; 32];
+    aes_gcm::aead::rand_core::RngCore::fill_bytes(&mut OsRng, &mut bytes);
+    BASE64.encode(bytes)
 }
 
 #[cfg(test)]
