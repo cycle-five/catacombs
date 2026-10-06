@@ -8,7 +8,7 @@ description = "Catacombs is a simple Discord oauth2 library with user management
 repository = "https://github.com/cycle-five/catacombs"
 authors = ["Cycle Five <cycle.five@proton.me>"]
 keywords = ["discord", "oauth", "authentication", "axum"]
-categories = ["authentication", "web-programming", "api"]
+categories = ["authentication", "web-programming", "web-programming::http-server"]
 readme = "README.md"
 exclude = [".github/", "docker-compose.yml", "rustfmt.toml", "docs/"]
 
