@@ -59,11 +59,9 @@ revisited when `rsa` ships a fix. The alternative is jsonwebtoken's
 `aws_lc_rs` backend, which drops `rsa` entirely but brings a C toolchain into
 the build.
 
-## Open question: crates.io
+## Settled: crates.io
 
-The release workflow already publishes when a `CRATES_IO_TOKEN` secret is
-set. Without one, a tag makes a GitHub release and stops. The name
-`catacombs` is still free. Nothing that uses catacombs today needs it
-published, since CrackTunes pins it by git tag. The case for publishing is
-anyone else. The case for waiting is that the session work above will change
-public types, and a published 0.x is still a promise to someone.
+catacombs is published from v0.1.1. A tag that matches `Cargo.toml` publishes
+it through the release workflow, using the `CRATES_IO_TOKEN` secret. Because a
+0.x minor bump may break things under Cargo's rules, the session work above
+ships as 0.2.0, not as a 0.1.x patch.
