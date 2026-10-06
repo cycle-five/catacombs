@@ -60,7 +60,7 @@ the build.
 
 ## Settled: crates.io
 
-catacombs is published from v0.1.1. A tag that matches `Cargo.toml` publishes
+catacombs is published from v0.2.0; v0.1.1's publish was refused over a category slug. A tag that matches `Cargo.toml` publishes
 it through the release workflow, using the `CRATES_IO_TOKEN` secret. Because a
 0.x minor bump may break things under Cargo's rules, the session work above
-ships as 0.2.0, not as a 0.1.x patch.
+ships as the next minor release, not as a 0.2.x patch.
