@@ -32,7 +32,6 @@ logs/
 *.profdata
 coverage/
 lcov.info
-tarpaulin-report.html
 
 # Documentation build
 /doc/
